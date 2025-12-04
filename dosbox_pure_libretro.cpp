@@ -1823,10 +1823,10 @@ void GFX_Events()
 					if (li.key_count > 0)
 					{
 						Bit8u key = li.k[li.current_index];
+						// Press the key (will be released on LISTCYCLEUP)
 						KEYBOARD_AddKey((KBD_KEYS)key, true);
-						KEYBOARD_AddKey((KBD_KEYS)key, false);
 
-						// Advance index forward
+						// Advance index forward for next press
 						li.current_index = (li.current_index + 1) % li.key_count;
 					}
 				}
@@ -1834,6 +1834,18 @@ void GFX_Events()
 			}
 		case DBPET_LISTCYCLEUP:
 			{
+				// Release the key that was just pressed
+				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
+				{
+					DBP_ListItem& li = dbp_listitems[e.val];
+					if (li.key_count > 0)
+					{
+						// Release the previous key (we already advanced the index)
+						Bit8u prev_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
+						Bit8u key = li.k[prev_index];
+						KEYBOARD_AddKey((KBD_KEYS)key, false);
+					}
+				}
 				break;
 			}
 		case DBPET_LISTCYCLEREVERSE:
@@ -1845,8 +1857,8 @@ void GFX_Events()
 					if (li.key_count > 0)
 					{
 						Bit8u key = li.k[li.current_index];
+						// Press the key (will be released on LISTCYCLEREVERSEUP)
 						KEYBOARD_AddKey((KBD_KEYS)key, true);
-						KEYBOARD_AddKey((KBD_KEYS)key, false);
 
 						// Advance index backward (with wrap-around)
 						li.current_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
@@ -1856,6 +1868,18 @@ void GFX_Events()
 			}
 		case DBPET_LISTCYCLEREVERSEUP:
 			{
+				// Release the key that was just pressed
+				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
+				{
+					DBP_ListItem& li = dbp_listitems[e.val];
+					if (li.key_count > 0)
+					{
+						// Release the previous key (we already advanced the index)
+						Bit8u next_index = (li.current_index + 1) % li.key_count;
+						Bit8u key = li.k[next_index];
+						KEYBOARD_AddKey((KBD_KEYS)key, false);
+					}
+				}
 				break;
 			}
 

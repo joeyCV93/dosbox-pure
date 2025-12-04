@@ -17,7 +17,7 @@
  */
 
 struct DBP_WheelItem { Bit8u port, key_count, k[4]; };
-struct DBP_ListItem { Bit8u port, key_count, current_index, k[10]; };
+struct DBP_ListItem { Bit8u port, key_count, current_index, k[10]; int repeat_counter; bool is_held; };
 static std::vector<DBP_WheelItem> dbp_wheelitems;
 static std::vector<DBP_ListItem> dbp_listitems;
 static std::vector<Bit8u> dbp_custom_mapping;
@@ -117,9 +117,21 @@ struct DBP_PadMapping
 				for (const DBP_ListItem& li : dbp_listitems)
 				{
 					if (li.port != port || !li.key_count) continue;
-					*p = (Bit8u)LIST_ID | (Bit8u)((li.key_count - 1)<<6);  // LIST_ID = 21
-					memcpy(p+1, li.k, li.key_count);
-					p += 1 + li.key_count;
+					// For lists, we need more than 2 bits for key count (up to 10 keys)
+					// Use bit 5 (HasActionName) as extension: if set, key_count is in next byte
+					if (li.key_count <= 4)
+					{
+						*p = (Bit8u)LIST_ID | (Bit8u)((li.key_count - 1)<<6);
+						memcpy(p+1, li.k, li.key_count);
+						p += 1 + li.key_count;
+					}
+					else
+					{
+						*p++ = (Bit8u)LIST_ID | (1<<5);  // Set bit 5 to indicate extended format
+						*p++ = li.key_count;  // Store full key count in next byte
+						memcpy(p, li.k, li.key_count);
+						p += li.key_count;
+					}
 					(*pCount)++;
 				}
 
@@ -940,10 +952,22 @@ private:
 			P += KeyCount * (1 + (int)IsAnalog);
 			if (!--Remain) return;
 			Bit8u v = *(P++);
-			KeyCount = 1 + (v >> 6);
 			BtnID = (Bit8u)(v & 31);
 			IsAnalog = ((BtnID >> 2) == 4); // 16 - 19
 			HasActionName = !!(v & 32);
+
+			// Handle extended format for LIST_ID with >4 keys
+			if (BtnID == LIST_ID && HasActionName && !(v & 0xC0))
+			{
+				// Extended format: bit 5 set, key_count in next byte
+				KeyCount = *(P++);
+				HasActionName = false; // Clear flag since it's used for extended format
+			}
+			else
+			{
+				KeyCount = 1 + (v >> 6);
+			}
+
 			DBP_ASSERT(Remain >= 0); // Removed BtnID check - we now support virtual button IDs for list bindings (22+)
 			if (HasActionName) { NameOffset = 0; do { NameOffset = (NameOffset<<7)|(*P&127); } while (*(P++) & 128); }
 		}

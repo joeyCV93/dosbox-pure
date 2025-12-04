@@ -726,6 +726,36 @@ struct DBP_MapperMenuState final : DBP_MenuState
 		int key = -1;
 		if (b.evt == DBPET_KEYDOWN)
 			key = b.meta;
+		else if (b.evt == DBPET_LISTCYCLE)
+		{
+			// Display forward list binding
+			if (b.meta >= 0 && b.meta < (int)dbp_listitems.size())
+			{
+				const DBP_ListItem& li = dbp_listitems[b.meta];
+				list.emplace_back(IT_EDIT, item_info, "  [Edit] Cycle List (Fwd): ");
+				for (int i = 0; i != li.key_count; i++)
+				{
+					if (i > 0) list.back().str += ", ";
+					list.back().str += DBP_GETKEYNAME(li.k[i]);
+				}
+			}
+			return;
+		}
+		else if (b.evt == DBPET_LISTCYCLEREVERSE)
+		{
+			// Display reverse list binding
+			if (b.meta >= 0 && b.meta < (int)dbp_listitems.size())
+			{
+				const DBP_ListItem& li = dbp_listitems[b.meta];
+				list.emplace_back(IT_EDIT, item_info, "  [Edit] Cycle List (Rev): ");
+				for (int i = 0; i != li.key_count; i++)
+				{
+					if (i > 0) list.back().str += ", ";
+					list.back().str += DBP_GETKEYNAME(li.k[i]);
+				}
+			}
+			return;
+		}
 		else if (b.evt == DBPET_AXISMAPPAIR)
 			key = DBP_MAPPAIR_GET(apart?1:-1, b.meta);
 		else for (const DBP_SpecialMapping& sm : DBP_SpecialMappings)
@@ -817,6 +847,25 @@ struct DBP_MapperMenuState final : DBP_MenuState
 				list.emplace_back(IT_NONE, -1, (haveWheelOptions ? "  button was bound to Action Wheel" : "  options have been defined here"));
 			}
 			list.emplace_back(IT_NONE, 0);
+
+			// List items section
+			list.emplace_back(IT_NONE, 2);
+			list.emplace_back(IT_NONE, 0, "Cycle Lists: ");
+			bool haveListItems = false;
+			for (const DBP_ListItem& li : dbp_listitems)
+			{
+				if (li.port != bind_port) continue;
+				list.emplace_back(IT_NONE, 0, "  List:");
+				for (int i = 0; i != li.key_count; i++)
+				{
+					list.emplace_back(IT_EDIT, (Bit16s)((&li - &dbp_listitems[0] + 1) * -100 - i), "    ");
+					list.back().str += DBP_GETKEYNAME(li.k[i]);
+				}
+				list.emplace_back(IT_NONE, 0);
+				haveListItems = true;
+			}
+			list.emplace_back(IT_ADD, -2, "  Add List");
+			list.emplace_back(IT_NONE, 0);
 		}
 		if (!DBP_FullscreenOSD)
 		{
@@ -890,10 +939,35 @@ struct DBP_MapperMenuState final : DBP_MenuState
 		list.emplace_back(IT_DEVICE,   3, "  "); list.back().str += DBPDEV_Joystick;
 		for (const DBP_SpecialMapping& sm : DBP_SpecialMappings)
 		{
-			if (sm.dev || (sm.evt != DBPET_TOGGLEOSD && edit_info < 0)) continue; // no wheel no port shift as wheel options
+			// Allow special mappings for regular binds and wheels, but not lists (-2 and -100 and below)
+			if (sm.dev || (sm.evt != DBPET_TOGGLEOSD && (edit_info == -2 || edit_info <= -100))) continue;
 			if (sm.evt == DBPET_SHIFTPORT && sm.meta == bind_port) continue;
 			list.emplace_back(IT_SELECT, (Bit16s)(DBP_SPECIALMAPPINGS_KEY + (&sm - DBP_SpecialMappings)), "  ");
 			list.back().str += sm.name;
+		}
+		// Add cycle lists as bindable options (only when editing regular binds, not wheel/list items)
+		if (edit_info >= 0)
+		{
+			for (const DBP_ListItem& li : dbp_listitems)
+			{
+				if (li.port != bind_port) continue;
+				list.emplace_back(IT_SELECT, (Bit16s)(-10000 - (Bit16s)(&li - &dbp_listitems[0])), "  Cycle List (Forward): ");
+				for (int i = 0; i != li.key_count; i++)
+				{
+					if (i > 0) list.back().str += ", ";
+					list.back().str += DBP_GETKEYNAME(li.k[i]);
+				}
+			}
+			for (const DBP_ListItem& li : dbp_listitems)
+			{
+				if (li.port != bind_port) continue;
+				list.emplace_back(IT_SELECT, (Bit16s)(-20000 - (Bit16s)(&li - &dbp_listitems[0])), "  Cycle List (Reverse): ");
+				for (int i = 0; i != li.key_count; i++)
+				{
+					if (i > 0) list.back().str += ", ";
+					list.back().str += DBP_GETKEYNAME(li.k[i]);
+				}
+			}
 		}
 		if (edit_mode == EDIT_EXISTING)
 		{
@@ -907,15 +981,25 @@ struct DBP_MapperMenuState final : DBP_MenuState
 					if (PORT_DEVICE_INDEX_ID(b) == PORT_DEVICE_INDEX_ID(edit))
 						count++;
 			}
-			else // editing wheel
+			else if (edit_info == -1 || (edit_info <= -4 && edit_info >= -50)) // editing wheel
 			{
 				count = dbp_wheelitems[edit_info / -4 - 1].key_count;
+				if (count < 4)
+				{
+					list.emplace_back(IT_NONE);
+					list.emplace_back(IT_ADD, 0, "  [Additional Binding]");
+				}
 			}
-			if (count < 4)
+			else if (edit_info <= -100) // editing existing list
 			{
-				list.emplace_back(IT_NONE);
-				list.emplace_back(IT_ADD, 0, "  [Additional Binding]");
+				count = dbp_listitems[edit_info / -100 - 1].key_count;
+				if (count < 10)
+				{
+					list.emplace_back(IT_NONE);
+					list.emplace_back(IT_ADD, 0, "  [Additional Binding]");
+				}
 			}
+			// else edit_info == -2 (creating new list), don't show additional binding option yet
 		}
 		#ifdef DBP_STANDALONE
 		if (edit_info >= 0 && edit_mode != EDIT_ADDITIONAL && DBPS_HaveJoy()) // editing bind (not wheel)
@@ -1000,9 +1084,9 @@ struct DBP_MapperMenuState final : DBP_MenuState
 				bool isEdit = (ok_type == IT_SELECT && edit_mode == EDIT_EXISTING); // add new entry
 				bool isDelete = (ok_type == IT_DEL); // deleting entry
 				DBP_InputBind copy = (edit_mode == EDIT_NEW ? BindFromPadNum((Bit8u)edit_info) : dbp_input_binds[edit_info>>1]);
-				DBP_PadMapping::EditBind((isNew ? copy : dbp_input_binds[edit_info>>1]), isNew, isEdit, isDelete, (Bit8u)(edit_info&1), (Bit8u)list[sel].info);
+				DBP_PadMapping::EditBind((isNew ? copy : dbp_input_binds[edit_info>>1]), isNew, isEdit, isDelete, (Bit8u)(edit_info&1), (Bit16s)list[sel].info);
 			}
-			else // editing wheel
+			else if (edit_info == -1 || (edit_info <= -4 && edit_info >= -50)) // editing wheel (new=-1, existing=-4 to -50)
 			{
 				DBP_WheelItem* edit = (edit_mode == EDIT_NEW ? NULL : &dbp_wheelitems[edit_info / -4 - 1]);
 				if (ok_type == IT_SELECT && edit_mode == EDIT_NEW) // add new entry
@@ -1021,6 +1105,29 @@ struct DBP_MapperMenuState final : DBP_MenuState
 				{
 					if (!--edit->key_count) dbp_wheelitems.erase(dbp_wheelitems.begin() + (edit_info / -4 - 1));
 					else memmove(edit->k + (edit_info & 3), edit->k + (edit_info & 3) + 1, 3 - (edit_info & 3));
+				}
+			}
+			else // editing list (new=-2, existing=-100 and below)
+			{
+				DBP_ListItem* edit = (edit_mode == EDIT_NEW ? NULL : &dbp_listitems[edit_info / -100 - 1]);
+				if (ok_type == IT_SELECT && edit_mode == EDIT_NEW) // add new entry
+				{
+					dbp_listitems.push_back({ bind_port, 1, 0, { (Bit8u)list[sel].info } });
+				}
+				else if (ok_type == IT_SELECT && edit_mode == EDIT_ADDITIONAL)
+				{
+					edit->k[edit->key_count++] = (Bit8u)list[sel].info;
+				}
+				else if (ok_type == IT_SELECT && edit_mode == EDIT_EXISTING) // edit entry
+				{
+					Bit8u key_index = (Bit8u)(-(edit_info % -100));
+					edit->k[key_index] = (Bit8u)list[sel].info;
+				}
+				else if (ok_type == IT_DEL) // deleting entry
+				{
+					Bit8u key_index = (Bit8u)(-(edit_info % -100));
+					if (!--edit->key_count) dbp_listitems.erase(dbp_listitems.begin() + (edit_info / -100 - 1));
+					else memmove(edit->k + key_index, edit->k + key_index + 1, edit->key_count - key_index);
 				}
 			}
 			changed = true;

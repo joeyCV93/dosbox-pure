@@ -17,7 +17,9 @@
  */
 
 struct DBP_WheelItem { Bit8u port, key_count, k[4]; };
+struct DBP_ListItem { Bit8u port, key_count, current_index, k[10]; };
 static std::vector<DBP_WheelItem> dbp_wheelitems;
+static std::vector<DBP_ListItem> dbp_listitems;
 static std::vector<Bit8u> dbp_custom_mapping;
 static Bit16s dbp_bind_mousewheel, dbp_yml_mousewheel;
 static bool dbp_analog_buttons;
@@ -30,7 +32,7 @@ static float dbp_mouse_speed_x = 1, dbp_mouse_speed_y = 1, dbp_joymouse_speed = 
 
 struct DBP_PadMapping
 {
-	enum { DBP_PADMAP_MAXSIZE_PORT = (1 + (16 * (1 + 4)) + (4 * (1 + 8))), WHEEL_ID = 20 };
+	enum { DBP_PADMAP_MAXSIZE_PORT = (1 + (16 * (1 + 4)) + (4 * (1 + 8))), WHEEL_ID = 20, LIST_ID = 21  };
 	enum EPreset : Bit8u { PRESET_NONE, PRESET_AUTOMAPPED, PRESET_GENERICKEYBOARD, PRESET_MOUSE_LEFT_ANALOG, PRESET_MOUSE_RIGHT_ANALOG, PRESET_GRAVIS_GAMEPAD, PRESET_BASIC_JOYSTICK_1, PRESET_BASIC_JOYSTICK_2, PRESET_THRUSTMASTER_FLIGHTSTICK, PRESET_BOTH_DOS_JOYSTICKS, PRESET_CUSTOM };
 	enum EPortMode : Bit8u { MODE_DISABLED, MODE_MAPPER, MODE_PRESET_AUTOMAPPED, MODE_PRESET_GENERICKEYBOARD, MODE_PRESET_LAST = MODE_PRESET_AUTOMAPPED + (PRESET_CUSTOM - PRESET_AUTOMAPPED) - 1, MODE_KEYBOARD, MODE_KEYBOARD_MOUSE1, MODE_KEYBOARD_MOUSE2 };
 
@@ -85,7 +87,12 @@ struct DBP_PadMapping
 		}
 		else
 		{
-			dbp_custom_mapping.resize((DBP_PADMAP_MAXSIZE_PORT * (last_port + 1)) + (dbp_wheelitems.size() * 5));
+			// Calculate size: base + wheels + lists + list bindings (2 bytes each)
+			size_t list_bindings_count = 0;
+			for (const DBP_InputBind& b : dbp_input_binds)
+				if (b.evt == DBPET_LISTCYCLE || b.evt == DBPET_LISTCYCLEREVERSE)
+					list_bindings_count++;
+			dbp_custom_mapping.resize((DBP_PADMAP_MAXSIZE_PORT * (last_port + 1)) + (dbp_wheelitems.size() * 5) + (dbp_listitems.size() * 11) + (list_bindings_count * 2));
 			Bit8u *data = &dbp_custom_mapping[0], *p = data, *pCount;
 			for (Bit8u port = 0; port <= last_port; port++)
 			{
@@ -105,6 +112,32 @@ struct DBP_PadMapping
 					memcpy(p+1, wi.k, wi.key_count);
 					p += 1 + wi.key_count;
 					(*pCount)++;
+				}
+			
+				for (const DBP_ListItem& li : dbp_listitems)
+				{
+					if (li.port != port || !li.key_count) continue;
+					*p = (Bit8u)LIST_ID | (Bit8u)((li.key_count - 1)<<6);  // LIST_ID = 21
+					memcpy(p+1, li.k, li.key_count);
+					p += 1 + li.key_count;
+					(*pCount)++;
+				}
+
+				// Save list bindings (which buttons are bound to which lists)
+				// We encode these as special "virtual" button IDs starting at 22
+				// Format: btnId 22 = list 0 forward, 23 = list 0 reverse, 24 = list 1 forward, etc.
+				for (const DBP_InputBind& b : dbp_input_binds)
+				{
+					if (b.port != port) continue;
+					if (b.evt == DBPET_LISTCYCLE || b.evt == DBPET_LISTCYCLEREVERSE)
+					{
+						// Encode: button ID, actual button value, list index, forward/reverse flag
+						// Store as: virtual_btn_id (22+), then actual button info
+						Bit8u virtual_btn_id = 22 + (b.meta * 2) + (b.evt == DBPET_LISTCYCLEREVERSE ? 1 : 0);
+						*p++ = virtual_btn_id | 0; // key_count-1 = 0 (1 key)
+						*p++ = b.id; // Store which button this is bound to
+						(*pCount)++;
+					}
 				}
 			}
 			dbp_custom_mapping.resize(p - data);
@@ -126,22 +159,42 @@ struct DBP_PadMapping
 		}
 	}
 
-	static void EditBind(DBP_InputBind& b, bool isNew, bool isEdit, bool isDelete, Bit8u bind_part, Bit8u bind_key)
+	static void EditBind(DBP_InputBind& b, bool isNew, bool isEdit, bool isDelete, Bit8u bind_part, Bit16s bind_key)
 	{
 		DBP_ASSERT((int)isNew + (int)isEdit + (int)isDelete == 1);
 		dbp_binds_changed |= (1 << b.port);
 		if (isNew || isEdit)
 		{
-			Bit8u k0 = bind_key, k1 = 0;
-			if (b.device == RETRO_DEVICE_ANALOG) // Binding to an axis
+			// Check if binding to a list
+			if (bind_key <= -10000 && bind_key > -20000)
 			{
-				Bit16s oldmeta = ((b.evt != DBPET_AXISMAPPAIR && b.evt != _DBPET_MAX) ? GetAxisSpecialMappingMeta(b.evt) : b.meta);
-				Bit8u other_key = DBP_MAPPAIR_GET((bind_part ? -1 : 1), oldmeta);
-				k0 = (bind_part ? other_key : bind_key);
-				k1 = (bind_part ? bind_key : other_key);
+				// Forward cycle list (range -10000 to -10999)
+				Bit16s list_index = -10000 - bind_key;
+				b.evt = DBPET_LISTCYCLE;
+				b.meta = list_index;
+				if (isNew) DBP_PadMapping::InsertBind(b);
 			}
-			if (!SetBindMetaFromPair(b, k0, k1)) { DBP_ASSERT(0); }
-			if (isNew) DBP_PadMapping::InsertBind(b);
+			else if (bind_key <= -20000)
+			{
+				// Reverse cycle list (range -20000 and below)
+				Bit16s list_index = -20000 - bind_key;
+				b.evt = DBPET_LISTCYCLEREVERSE;
+				b.meta = list_index;
+				if (isNew) DBP_PadMapping::InsertBind(b);
+			}
+			else
+			{
+				Bit8u k0 = (Bit8u)bind_key, k1 = 0;
+				if (b.device == RETRO_DEVICE_ANALOG) // Binding to an axis
+				{
+					Bit16s oldmeta = ((b.evt != DBPET_AXISMAPPAIR && b.evt != _DBPET_MAX) ? GetAxisSpecialMappingMeta(b.evt) : b.meta);
+					Bit8u other_key = DBP_MAPPAIR_GET((bind_part ? -1 : 1), oldmeta);
+					k0 = (bind_part ? other_key : (Bit8u)bind_key);
+					k1 = (bind_part ? (Bit8u)bind_key : other_key);
+				}
+				if (!SetBindMetaFromPair(b, k0, k1)) { DBP_ASSERT(0); }
+				if (isNew) DBP_PadMapping::InsertBind(b);
+			}
 		}
 		if (isDelete) dbp_input_binds.erase(dbp_input_binds.begin() + (&b - &dbp_input_binds[0]));
 	}
@@ -329,6 +382,14 @@ struct DBP_PadMapping
 	{
 		DBP_InputBind bnd = { port, RETRO_DEVICE_JOYPAD, 0, WHEEL_ID };
 		if (!SetBindMetaFromPair(bnd, k)) { DBP_ASSERT(0); bnd.device = RETRO_DEVICE_NONE; }
+		return bnd;
+	}
+
+	static DBP_InputBind BindForList(Bit8u port, Bit8u list_index)
+	{
+		DBP_InputBind bnd = { port, RETRO_DEVICE_JOYPAD, 0, LIST_ID };
+		bnd.evt = DBPET_LISTCYCLE;
+		bnd.meta = list_index;  // Store which list this binding refers to
 		return bnd;
 	}
 
@@ -579,6 +640,10 @@ private:
 			if (dbp_wheelitems[i].port == port)
 				dbp_wheelitems.erase(dbp_wheelitems.begin() + i);
 
+		for (size_t i = dbp_listitems.size(); i--;)
+			if (dbp_listitems[i].port == port)
+				dbp_listitems.erase(dbp_listitems.begin() + i);
+
 		for (const BindDecoder& it : BindDecoder(&mapping))
 		{
 			Bit8u btnId = it.BtnID;
@@ -592,7 +657,32 @@ private:
 				continue;
 			}
 
-			if (btnId > WHEEL_ID) { DBP_ASSERT(0); goto err; }
+			if (btnId == LIST_ID)
+			{
+				dbp_listitems.emplace_back();
+				DBP_ListItem& li = dbp_listitems.back();
+				li.port = port;
+				li.key_count = it.KeyCount;
+				li.current_index = 0;  // Initialize to first key
+				memcpy(li.k, it.P, it.KeyCount);
+				continue;
+			}
+
+			if (btnId >= 22) // List binding (virtual button IDs 22+)
+			{
+				// Decode: btnId 22 = list 0 forward, 23 = list 0 reverse, 24 = list 1 forward, etc.
+				Bit8u list_index = (btnId - 22) / 2;
+				bool is_reverse = ((btnId - 22) & 1) != 0;
+				Bit8u actual_button = it.P[0]; // The button this is bound to
+
+				DBP_InputBind bnd = BindForBtn(port, actual_button);
+				bnd.evt = is_reverse ? DBPET_LISTCYCLEREVERSE : DBPET_LISTCYCLE;
+				bnd.meta = list_index;
+				InsertBind(bnd);
+				continue;
+			}
+
+			if (btnId > LIST_ID) { DBP_ASSERT(0); goto err; }
 			while (btnId != 0xFF && bound_buttons[btnId]) btnId = bindUsedToNext[btnId];
 			if (btnId == 0xFF) continue;
 			bound_buttons[btnId] = true;
@@ -616,7 +706,8 @@ private:
 
 	static const Bit8u* SkipMapping(const Bit8u* mapping)
 	{
-		for (const BindDecoder& it : BindDecoder(&mapping)) if (it.BtnID > WHEEL_ID) { DBP_ASSERT(0); return mapping+(DBP_PADMAP_MAXSIZE_PORT*DBP_MAX_PORTS); }
+		// No need to check BtnID anymore - we support virtual button IDs 22+ for list bindings
+		for (const BindDecoder& it : BindDecoder(&mapping)) { } // Just iterate through to skip
 		return mapping;
 	}
 
@@ -680,6 +771,12 @@ private:
 			}
 			else if (b.evt == DBPET_KEYDOWN)
 				p[0] = (Bit8u)b.meta;
+			else if (b.evt == DBPET_LISTCYCLE || b.evt == DBPET_LISTCYCLEREVERSE)
+			{
+				// List cycle bindings can't be represented as key bindings
+				// Mark as KBD_NONE so they're skipped
+				p[0] = p[1] = KBD_NONE;
+			}
 			else for (const DBP_SpecialMapping& sm : DBP_SpecialMappings)
 				if (sm.evt == b.evt && sm.meta == b.meta)
 					{ p[0] = (Bit8u)DBP_SPECIALMAPPINGS_KEY+(Bit8u)(&sm - DBP_SpecialMappings); break; }
@@ -853,7 +950,7 @@ private:
 			BtnID = (Bit8u)(v & 31);
 			IsAnalog = ((BtnID >> 2) == 4); // 16 - 19
 			HasActionName = !!(v & 32);
-			DBP_ASSERT(BtnID <= WHEEL_ID && Remain >= 0);
+			DBP_ASSERT(Remain >= 0); // Removed BtnID check - we now support virtual button IDs for list bindings (22+)
 			if (HasActionName) { NameOffset = 0; do { NameOffset = (NameOffset<<7)|(*P&127); } while (*(P++) & 128); }
 		}
 		const Bit8u *P, **OutPtr; Bit8u Remain, KeyCount, BtnID; bool IsAnalog, HasActionName; Bit32u NameOffset;

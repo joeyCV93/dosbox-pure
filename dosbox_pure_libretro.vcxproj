@@ -104,6 +104,11 @@
       <GenerateWindowsMetadata>false</GenerateWindowsMetadata>
     </Link>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <PostBuildEvent>
+      <Command> copy "$(TargetPath)" "C:\SteamLibrary\steamapps\common\RetroArch\downloads\$(TargetFileName)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
   <!--
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
     <ClCompile>

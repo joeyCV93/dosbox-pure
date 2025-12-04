@@ -140,6 +140,8 @@ enum DBP_Event_Type : Bit8u
 	DBPET_KEYDOWN, DBPET_KEYUP,
 	DBPET_TOGGLEOSD, DBPET_TOGGLEOSDUP,
 	DBPET_ACTIONWHEEL, DBPET_ACTIONWHEELUP,
+	DBPET_LISTCYCLE, DBPET_LISTCYCLEUP,
+	DBPET_LISTCYCLEREVERSE, DBPET_LISTCYCLEREVERSEUP,
 	DBPET_SHIFTPORT, DBPET_SHIFTPORTUP,
 
 	DBPET_AXISMAPPAIR,
@@ -198,7 +200,7 @@ static struct DBP_Event { DBP_Event_Type type; Bit8u port; int val, val2; } dbp_
 static int dbp_event_queue_write_cursor;
 static int dbp_event_queue_read_cursor;
 static int dbp_keys_down_count;
-static unsigned char dbp_keys_down[KBD_LAST + 21];
+static unsigned char dbp_keys_down[KBD_LAST + 23];
 static unsigned short dbp_keymap_dos2retro[KBD_LAST];
 static unsigned char dbp_keymap_retro2dos[RETROK_LAST];
 
@@ -342,6 +344,10 @@ static void DBP_QueueEvent(DBP_Event_Type type, Bit8u port, int val = 0, int val
 		case DBPET_TOGGLEOSDUP:    DBP_ASSERT(val >= 0 && val < 1); downs += KBD_LAST + 15; goto check_up;
 		case DBPET_ACTIONWHEEL:    DBP_ASSERT(val >= 0 && val < 1); downs += KBD_LAST + 16; goto check_down;
 		case DBPET_ACTIONWHEELUP:  DBP_ASSERT(val >= 0 && val < 1); downs += KBD_LAST + 16; goto check_up;
+	case DBPET_LISTCYCLE:      DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 21; goto check_down;
+	case DBPET_LISTCYCLEUP:    DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 21; goto check_up;
+	case DBPET_LISTCYCLEREVERSE:      DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 22; goto check_down;
+	case DBPET_LISTCYCLEREVERSEUP:    DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 22; goto check_up;
 		case DBPET_SHIFTPORT:      DBP_ASSERT(val >= 0 && val < 4); downs += KBD_LAST + 17; goto check_down;
 		case DBPET_SHIFTPORTUP:    DBP_ASSERT(val >= 0 && val < 4); downs += KBD_LAST + 17; goto check_up;
 
@@ -1845,6 +1851,51 @@ void GFX_Events()
 
 			case DBPET_ACTIONWHEEL: DBP_WheelShiftOSD(e.port, true); break;
 			case DBPET_ACTIONWHEELUP: DBP_WheelShiftOSD(e.port, false); break;
+
+		case DBPET_LISTCYCLE:
+			{
+				// e.val contains the list index (from bind.meta)
+				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
+				{
+					DBP_ListItem& li = dbp_listitems[e.val];
+					if (li.key_count > 0)
+					{
+						Bit8u key = li.k[li.current_index];
+						KEYBOARD_AddKey((KBD_KEYS)key, true);
+						KEYBOARD_AddKey((KBD_KEYS)key, false);
+
+						// Advance index forward
+						li.current_index = (li.current_index + 1) % li.key_count;
+					}
+				}
+				break;
+			}
+		case DBPET_LISTCYCLEUP:
+			{
+				break;
+			}
+		case DBPET_LISTCYCLEREVERSE:
+			{
+				// e.val contains the list index (from bind.meta)
+				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
+				{
+					DBP_ListItem& li = dbp_listitems[e.val];
+					if (li.key_count > 0)
+					{
+						Bit8u key = li.k[li.current_index];
+						KEYBOARD_AddKey((KBD_KEYS)key, true);
+						KEYBOARD_AddKey((KBD_KEYS)key, false);
+
+						// Advance index backward (with wrap-around)
+						li.current_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
+					}
+				}
+				break;
+			}
+		case DBPET_LISTCYCLEREVERSEUP:
+			{
+				break;
+			}
 
 			case DBPET_SHIFTPORT: DBP_WheelShiftOSD(e.port, true, (Bit8u)e.val); break;
 			case DBPET_SHIFTPORTUP: DBP_WheelShiftOSD(e.port, false, (Bit8u)e.val); break;

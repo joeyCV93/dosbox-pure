@@ -1866,6 +1866,11 @@ void GFX_Events()
 
 						// Advance index forward for next press
 						li.current_index = (li.current_index + 1) % li.key_count;
+
+						// Start tracking hold for repeat (forward direction)
+						li.is_held = true;
+						li.reverse = false;
+						li.repeat_counter = 0;
 					}
 				}
 				break;
@@ -1882,6 +1887,9 @@ void GFX_Events()
 						Bit8u prev_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
 						Bit8u key = li.k[prev_index];
 						KEYBOARD_AddKey((KBD_KEYS)key, false);
+
+						// Stop tracking hold
+						li.is_held = false;
 					}
 				}
 				break;
@@ -1900,6 +1908,11 @@ void GFX_Events()
 
 						// Advance index backward (with wrap-around)
 						li.current_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
+
+						// Start tracking hold for repeat (reverse direction)
+						li.is_held = true;
+						li.reverse = true;
+						li.repeat_counter = 0;
 					}
 				}
 				break;
@@ -1916,6 +1929,9 @@ void GFX_Events()
 						Bit8u next_index = (li.current_index + 1) % li.key_count;
 						Bit8u key = li.k[next_index];
 						KEYBOARD_AddKey((KBD_KEYS)key, false);
+
+						// Stop tracking hold
+						li.is_held = false;
 					}
 				}
 				break;
@@ -3599,6 +3615,37 @@ void retro_run(void)
 		{
 			Bit16s val = input_state_cb(b.port, b.device, b.index, b.id);
 			if (val != b.lastval) b.Update(val);
+		}
+
+		// Handle list cycling repeat when button is held
+		for (size_t i = 0; i < dbp_listitems.size(); i++)
+		{
+			DBP_ListItem& li = dbp_listitems[i];
+			if (li.is_held && li.key_count > 0)
+			{
+				li.repeat_counter++;
+				// Initial delay: 30 frames (~500ms at 60fps), then repeat every 6 frames (~100ms)
+				bool should_repeat = (li.repeat_counter == 30 || (li.repeat_counter > 30 && (li.repeat_counter % 6) == 0));
+				if (should_repeat)
+				{
+					// Release the current key
+					Bit8u prev_index = li.reverse
+						? ((li.current_index + 1) % li.key_count)  // for reverse, previous is next
+						: ((li.current_index == 0) ? li.key_count - 1 : li.current_index - 1);  // for forward, previous is prev
+					Bit8u old_key = li.k[prev_index];
+					KEYBOARD_AddKey((KBD_KEYS)old_key, false);
+
+					// Press the next key
+					Bit8u new_key = li.k[li.current_index];
+					KEYBOARD_AddKey((KBD_KEYS)new_key, true);
+
+					// Advance index in the appropriate direction
+					if (li.reverse)
+						li.current_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
+					else
+						li.current_index = (li.current_index + 1) % li.key_count;
+				}
+			}
 		}
 	}
 	else if (dbp_intercept == dbp_intercept_next)

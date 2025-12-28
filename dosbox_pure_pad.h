@@ -17,7 +17,7 @@
  */
 
 struct DBP_WheelItem { Bit8u port, key_count, k[4]; };
-struct DBP_ListItem { Bit8u port, key_count, current_index, k[10]; int repeat_counter; bool is_held; };
+struct DBP_ListItem { Bit8u port, key_count, current_index, k[10]; int repeat_counter; bool is_held, reverse; };
 static std::vector<DBP_WheelItem> dbp_wheelitems;
 static std::vector<DBP_ListItem> dbp_listitems;
 static std::vector<Bit8u> dbp_custom_mapping;

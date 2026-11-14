@@ -76,7 +76,7 @@ endif
 
 include $(CLEAR_VARS)
 LOCAL_MODULE       := retro
-LOCAL_SRC_FILES    := $(SOURCES)
+LOCAL_SRC_FILES    := $(SOURCES:$(LOCAL_PATH)/%=%)
 LOCAL_C_INCLUDES   := $(CORE_DIR)/include
 LOCAL_CFLAGS       := $(CFLAGS)
 LOCAL_CPPFLAGS     := $(CFLAGS)

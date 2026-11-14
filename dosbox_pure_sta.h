@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2020-2025 Bernhard Schelling
+ *  Copyright (C) 2020-2026 Bernhard Schelling
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@ enum { DBPS_OSD_WIDTH = 640, DBPS_OSD_HEIGHT = 480 };
 extern int DBPS_SaveSlotIndex;
 extern std::string DBPS_BrowsePath;
 void DBPS_OnContentLoad(const char* name, const char* dir, size_t dirlen);
+void DBPS_OnReset();
 void DBPS_SubmitOSDFrame(const void *data, unsigned width, unsigned height);
 bool DBPS_IsGameRunning();
 bool DBPS_IsShowingOSD();
@@ -32,5 +33,11 @@ bool DBPS_HaveJoy();
 bool DBPS_GetJoyBind(unsigned port, unsigned device, unsigned index, unsigned id, bool axispos, std::string& outJoyName, std::string& outBind, const char* prefix);
 void DBPS_RequestSaveLoad(bool save, bool load);
 bool DBPS_HaveSaveSlot();
+bool DBPS_ApplyConfigOverrides(const std::string& json);
+bool DBPS_IsConfigOverride(const char* key);
+void DBPS_ToggleConfigOverride(const char* key, const char* defaultval);
+void DBPS_InitLEDs(uint16_t key_modifiers);
 const std::string& DBPS_GetContentName();
+const std::string& DBPS_GetContentPath();
+std::string DBPS_GetConfigOverrideJSON();
 retro_time_t dbp_cpu_features_get_time_usec(void);

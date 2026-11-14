@@ -1460,7 +1460,11 @@ public:
 		if(type == "cdrom") type = "iso"; //Tiny hack for people who like to type -t cdrom
 
 		//Check type and exit early.
-		if (type != "floppy" && type != "hdd" && type != "iso") {
+		if (type != "floppy" && type != "hdd" && type != "iso"
+#ifndef C_DBP_ENABLE_DRIVE_MANAGER
+				&& type != "zip"
+#endif
+			) {
 			WriteOut(MSG_Get("PROGRAM_IMGMOUNT_TYPE_UNSUPPORTED"),type.c_str());
 			return;
 		}
@@ -1596,6 +1600,10 @@ public:
 
 		if(fstype=="fat") {
 			if (imgsizedetect) {
+#ifdef C_DBP_SUPPORT_DISK_MOUNT_DOSFILE
+				// fatDrive constructor does the geometry detection
+				sizes[0]=512;
+#else
 #if defined(C_DBP_SUPPORT_CDROM_MOUNT_DOSFILE) && defined(C_DBP_SUPPORT_DISK_MOUNT_DOSFILE)
 				Bit32u disksize;
 				DOS_File *diskfile = FindAndOpenDosFile(temp_line.c_str(), &disksize);
@@ -1642,6 +1650,7 @@ public:
 				sizes[0]=512;	sizes[1]=63;	sizes[2]=16;	sizes[3]=sectors;
 
 				LOG_MSG("autosized image file: %d:%d:%d:%d",sizes[0],sizes[1],sizes[2],sizes[3]);
+#endif
 			}
 
 			if (Drives[drive-'A']) {
@@ -1712,9 +1721,13 @@ public:
 					break;
 			}
 #else
-			void DBP_ImgMountLoadDisks(char drive, const std::vector<std::string>& paths, bool fat, bool iso);
-			DBP_ImgMountLoadDisks(drive, paths, true, false);
-			
+			const bool is_zip = (type == "zip");
+			void DBP_ImgMountLoadDisks(char drive, const std::vector<std::string>& paths, bool fat, bool iso, bool zip);
+			DBP_ImgMountLoadDisks(drive, paths, !is_zip, false, is_zip);
+			if ((drive - 'A') < MAX_DISK_IMAGES && !imageDiskList[drive - 'A']) {
+				WriteOut(MSG_Get("PROGRAM_IMGMOUNT_CANT_CREATE"));
+				return;
+			}
 			std::string tmp(paths[0]);
 			for (std::vector<std::string>::size_type i = 1; i < paths.size(); i++) {
 				tmp += "; " + paths[i];
@@ -1767,8 +1780,8 @@ public:
 			// Set the correct media byte in the table 
 			mem_writeb(Real2Phys(dos.tables.mediaid) + (drive - 'A') * 9, mediaid);
 #else
-			void DBP_ImgMountLoadDisks(char drive, const std::vector<std::string>& paths, bool fat, bool iso);
-			DBP_ImgMountLoadDisks(drive, paths, false, true);
+			void DBP_ImgMountLoadDisks(char drive, const std::vector<std::string>& paths, bool fat, bool iso, bool zip);
+			DBP_ImgMountLoadDisks(drive, paths, false, true, false);
 
 			std::vector<std::string>::size_type i;
 #endif

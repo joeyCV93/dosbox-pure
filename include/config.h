@@ -43,7 +43,7 @@
 
 // ----- DOSBOX CORE FEATURES: Many of these probably won't work even if you enable them
 #define C_FPU 1 /* Define to 1 to enable floating point emulation */
-#define C_MMX 1 /* Define to 1 to enable mmx emulation */
+#define C_MMX 0 /* Define to 1 to enable mmx emulation */
 #define C_CORE_INLINE 1 /* Define to 1 to use inlined memory functions in cpu core */
 /* #undef C_DIRECTSERIAL */ /* Define to 1 if you want serial passthrough support (Win32, Posix and OS/2). */
 /* #undef C_IPX */ /* Define to 1 to enable IPX over Internet networking, requires SDL_net */
@@ -86,6 +86,7 @@
 #define C_DBP_SUPPORT_MIDI_TSF
 #define C_DBP_SUPPORT_MIDI_RETRO
 #define C_DBP_SUPPORT_MIDI_MT32
+#define C_DBP_SUPPORT_MIDI_SC55
 #define C_DBP_ENABLE_NUKEDOPL3
 #define C_DBP_ENABLE_IDE
 #define C_DBP_ENABLE_VOODOO

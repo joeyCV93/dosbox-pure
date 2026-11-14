@@ -16,5 +16,4 @@ libs/
 *.so
 *.dylib
 jni/*.bat
-/.idea
-/src
+.idea/

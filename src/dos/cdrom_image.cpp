@@ -318,8 +318,17 @@ CDROM_Interface_Image::CDROM_Interface_Image(Bit8u subUnit)
 
 CDROM_Interface_Image::~CDROM_Interface_Image()
 {
+#ifndef C_DBP_USE_SDL
+	extern void DBP_MIXER_MutexLock(bool flag);
+	DBP_MIXER_MutexLock(true);
+#endif
 	refCount--;
-	if (player.cd == this) player.cd = NULL;
+	if (player.cd == this)
+	{
+		//DBP: Stop audio so thread doesn't try to play
+		StopAudio();
+		player.cd = NULL;
+	}
 	ClearTracks();
 	if (refCount == 0) {
 #ifdef C_DBP_USE_SDL
@@ -327,6 +336,9 @@ CDROM_Interface_Image::~CDROM_Interface_Image()
 #endif
 		player.channel->Enable(false);
 	}
+#ifndef C_DBP_USE_SDL
+	DBP_MIXER_MutexLock(false);
+#endif
 }
 
 void CDROM_Interface_Image::InitNewMedia()
@@ -650,7 +662,8 @@ void CDROM_Interface_Image::CDAudioCallBack(Bitu len)
 		player.channel->AddSilence();
 		return;
 	}
-	
+	if (len + RAW_SECTOR_SIZE > sizeof(player.buffer))
+		len = sizeof(player.buffer) - RAW_SECTOR_SIZE;
 #ifdef C_DBP_USE_SDL
 	SDL_mutexP(player.mutex);
 #endif
@@ -756,7 +769,7 @@ bool CDROM_Interface_Image::CanReadPVD(TrackFile *file, int sectorSize, bool mod
 {
 	Bit8u pvd[COOKED_SECTOR_SIZE];
 	int seek = 16 * sectorSize;	// first vd is located at sector 16
-	if (sectorSize == RAW_SECTOR_SIZE && !mode2) seek += 16;
+	if (sectorSize >= RAW_SECTOR_SIZE && !mode2) seek += 16;
 	if (mode2) seek += 24;
 	file->read(pvd, seek, COOKED_SECTOR_SIZE);
 	// pvd[0] = descriptor type, pvd[1..5] = standard identifier, pvd[6] = iso version (+8 for High Sierra)

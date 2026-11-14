@@ -89,7 +89,8 @@ static void SN76496Update(Bitu length) {
 	}
 	const Bitu MAX_SAMPLES = 2048;
 	if (length > MAX_SAMPLES)
-		return;
+		// DBP: Replaced return with clamping to avoid infinite loop in MixerChannel::Mix // return;
+		length = MAX_SAMPLES;
 	Bit16s buffer[MAX_SAMPLES];
 	Bit16s* outputs = buffer;
 
@@ -247,7 +248,7 @@ static void TandyDACGenerateDMASound(Bitu length) {
 static void TandyDACUpdate(Bitu length) {
 	if (tandy.dac.enabled && ((tandy.dac.mode&0x0c)==0x0c)) {
 		if (!tandy.dac.dma.transfer_done) {
-			Bitu len = length;
+			Bitu len = (length > TDAC_DMA_BUFSIZE ? TDAC_DMA_BUFSIZE : length);
 			TandyDACGenerateDMASound(len);
 		} else {
 			for (Bitu ct=0; ct < length; ct++) {
@@ -378,7 +379,15 @@ void DBPSerialize_TANDYSOUND(DBPArchive& ar_outer)
 		.SerializeExcept(tandy, tandy.chan, tandy.dac.chan)
 		.Serialize(dma_num)
 		.Serialize(device_num);
-	
+
+	if (ar.IsReset() && tandy.dac.chan)
+	{
+		tandy.dac.enabled=true;
+		tandy.dac.hw.base=0xc4;
+		tandy.dac.hw.irq =7;
+		tandy.dac.hw.dma =1;
+	}
+
 	if (ar.mode == DBPArchive::MODE_LOAD)
 	{
 		tandy.dac.dma.chan = GetDMAChannel(dma_num);

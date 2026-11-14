@@ -89,8 +89,8 @@ static Mutex DBP_AudioMutex;
 
 #ifdef C_DBP_LIBRETRO
 bool dbp_swapstereo;
+float dbp_volumes[6][2];
 #endif
-
 
 static INLINE Bit16s MIXER_CLIP(Bits SAMP) {
 	if (SAMP < MAX_AUDIO) {
@@ -160,8 +160,32 @@ void MIXER_DelChannel(MixerChannel* delchan) {
 }
 
 void MixerChannel::UpdateVolume(void) {
+#ifndef C_DBP_LIBRETRO
 	volmul[0]=(Bits)((1 << MIXER_VOLSHIFT)*scale*volmain[0]*mixer.mastervol[0]);
 	volmul[1]=(Bits)((1 << MIXER_VOLSHIFT)*scale*volmain[1]*mixer.mastervol[1]);
+#else
+	DBP_ASSERT(!strcmp(name, "SB") || !strcmp(name, "CMS") || !strcmp(name, "TSF") || !strcmp(name, "MT32") || !strcmp(name, "SC55") || !strcmp(name, "FM") || !strcmp(name, "SPKR") || !strcmp(name, "CDAUDIO") || !strcmp(name, "TANDY") || !strcmp(name, "TANDYDAC") || !strcmp(name, "GUS") || !strcmp(name, "DISNEY"));
+	int volidx = 0;
+	switch ((name[0]<<8) | name[1])
+	{
+		case (('S'<<8) | 'B') /* "SB"                 */:
+		case (('C'<<8) | 'M') /* "CMS"                */: break;
+		case (('T'<<8) | 'S') /* "TSF"                */:
+		case (('M'<<8) | 'T') /* "MT32"               */:
+		case (('S'<<8) | 'C') /* "SC55"               */: volidx = 1; break;
+		case (('F'<<8) | 'M') /* "FM"                 */: volidx = 2; break;
+		case (('S'<<8) | 'P') /* "SPKR"               */: volidx = 3; break;
+		case (('C'<<8) | 'D') /* "CDAUDIO"            */: volidx = 4; break;
+		case (('T'<<8) | 'A') /* "TANDY" / "TANDYDAC" */:
+		case (('G'<<8) | 'U') /* "GUS"                */:
+		case (('D'<<8) | 'I') /* "DISNEY"             */: volidx = 5; break;
+		default: DBP_ASSERT(0); break;
+	}
+	float vol = (1.0f + dbp_volumes[volidx][0]) * (1.0f + dbp_volumes[volidx][1]);
+	vol = (vol < 1.0f ? powf(10.0f,(vol-1.0f)*2.0f) : vol*vol);
+	volmul[0]=(Bits)((1 << MIXER_VOLSHIFT)*scale*volmain[0]*mixer.mastervol[0]*vol);
+	volmul[1]=(Bits)((1 << MIXER_VOLSHIFT)*scale*volmain[1]*mixer.mastervol[1]*vol);
+#endif
 }
 
 void MixerChannel::SetVolume(float _left,float _right) {
@@ -203,7 +227,8 @@ void MixerChannel::Mix(Bitu _needed) {
 		Bitu left = (needed - done);
 		left *= freq_add;
 		left  = (left >> FREQ_SHIFT) + ((left & FREQ_MASK)!=0);
-		DBP_ASSERT(left <= MIXER_BUFSIZE);
+		// DBP: Added to avoid potential overflow of MixTemp
+		if (left > (MIXER_BUFSIZE/4)) left = (MIXER_BUFSIZE/4);
 		handler(left);
 	}
 }
@@ -867,6 +892,16 @@ void DBP_MIXER_ScrapAudio()
 		MIXER_CallBack(0, dummy, (mixer.done > 164 ? 64 : mixer.done - 100) * MIXER_SSIZE);
 }
 
+void DBP_MIXER_ApplyVolumes()
+{
+	for (MixerChannel* chan = mixer.channels; chan; chan = chan->next) chan->UpdateVolume();
+}
+
+void DBP_MIXER_MutexLock(bool flag)
+{
+	if (flag) { SDL_LockAudio(); } else { SDL_UnlockAudio(); }
+}
+
 #include <dbp_serialize.h>
 
 DBPArchiveOptional::DBPArchiveOptional(DBPArchive& ar_outer, MixerChannel* chan) : DBPArchiveOptional(ar_outer, chan, (chan && chan->ever_enabled))
@@ -903,8 +938,145 @@ DBPArchiveOptional::DBPArchiveOptional(DBPArchive& ar_outer, MixerChannel* chan)
 	if (optionality != OPTIONAL_DISCARD)
 	{
 		chan->done = chan->needed = 0;
+		Callback_LockAudio();
 		mixer.pos = 0;
 		mixer.done = 0;
 		mixer.needed = mixer.min_needed+1;
+		Callback_UnlockAudio();
 	}
 }
+
+#ifdef DBP_STANDALONE
+static SpinLock EmuMixerLock;
+static volatile bool emulation_sleeping;
+
+void DBPS_MIXER_AroundEmulationWait(bool start_wait)
+{
+	EmuMixerLock.Lock();
+	emulation_sleeping = start_wait;
+	EmuMixerLock.Unlock();
+}
+
+float DBPS_AudioMix(short* buffer, Bit32u samples, float speed, int max_wait)
+{
+	//static Bitu mixer_debug_output, mixer_debug_generated;
+	const Bitu want = (speed == 1.0f ? (Bitu)samples : (speed > 999999.0f ? (Bitu)mixer.done : (Bitu)(samples * speed)));
+	if (want > mixer.done)
+	{
+		extern Bit64s dbp_cpu_features_get_time_usec(void);
+		const Bit64s usec = dbp_cpu_features_get_time_usec(), ms = (Bit64s)max_wait, midusec = usec+ms*500, maxusec = usec+ms*2000, limitusec = usec+ms*1000;
+
+		// First wait a bit for the emulation to naturally generate audio (unless running in aggressive mode)
+		static Bit8u aggressive;
+		while (!aggressive && want > mixer.done)
+		{
+			retro_sleep(0);
+			if ((dbp_cpu_features_get_time_usec()) > midusec) break;
+		}
+		if (aggressive) aggressive--;
+
+		// Then if not yet enough audio data exists, increase mixer.needed to the amount we want to output and try have it force generated
+		Callback_LockAudio();
+		const Bitu forcegen = (want > mixer.needed ? (want - mixer.needed) : 0), newneeded = mixer.needed + forcegen; //, olddone = mixer.done;
+		mixer.needed = newneeded;
+		Callback_UnlockAudio();
+		while (want > mixer.done)
+		{
+			EmuMixerLock.Lock();
+			if (emulation_sleeping) { MIXER_Mix(); EmuMixerLock.Unlock(); continue; } // force mix while emulation sleeps
+			EmuMixerLock.Unlock();
+			retro_sleep(0);
+			if ((dbp_cpu_features_get_time_usec()) > maxusec) break; // emulation lagging (or crashed)
+		}
+		//if (mixer.done < want) printf("[DBMIXER] Failed to force generate %u samples (only got %u)\n", (unsigned)forcegen, (unsigned)(mixer.done - olddone));
+		//mixer_debug_generated += (mixer.done - olddone);
+
+		// If mixer.needed increased since before, it was naturally done by the emulation so we can try to subtract some of our forced amount again
+		if (forcegen && mixer.needed > newneeded)
+		{
+			Callback_LockAudio();
+			const Bitu natural_increase = (mixer.needed - newneeded), reduce_generated = (natural_increase > forcegen ? forcegen : natural_increase);
+			mixer.needed -= reduce_generated;
+			if (mixer.needed < mixer.done) mixer.needed = mixer.done; // needed can't go lower than done
+			Callback_UnlockAudio();
+			//mixer_debug_generated -= reduce_generated;
+		}
+
+		// We allow audio generation to wait a bit longer than the audio latency because some audio drivers can deal with it for 1 frame (but if it happens once we enable aggressive mode)
+		if (dbp_cpu_features_get_time_usec() > limitusec)
+		{
+			aggressive = 5;
+			//printf("[DBMIXER] Took %u musec (beyond allowed %u)\n", (unsigned)(dbp_cpu_features_get_time_usec() - usec), (unsigned)((Bit64s)maxwait * 1000));
+		}
+	}
+
+	Bitu have = mixer.done, use;
+	if (have == 0 || want == 0)
+	{
+		memset(buffer, 0, samples * 4);
+		return 1.0f;
+	}
+
+	double audio_stretch = 1.0;
+	if (want == samples && have >= want)
+	{
+		use = want;
+		MIXER_CallBack(NULL, (unsigned char*)buffer,  (int)(want * 4));
+	}
+	else
+	{
+		enum { UI_MAX_SAMPLES = 4096*4 };
+		static short stretchbuf[UI_MAX_SAMPLES * 2]; // stereo
+
+		if (speed == 0.0f) use = (have < samples ? have : (Bitu)samples);
+		else               use = (have < want    ? have : want);
+
+		if (use > UI_MAX_SAMPLES) use = UI_MAX_SAMPLES;
+		audio_stretch = ((speed == 0.0f) ? 1.0 : (double)use / samples); // don't stretch during frame stepping (speed 0)
+		MIXER_CallBack(NULL, (unsigned char*)stretchbuf, (int)(use* 4));
+		//printf("[DBMIXER] Stretch %d (of %d available total) into %d (factor %f)\n", (int)use, (int)have, (int)samples, (float)audio_stretch);
+
+		if (0)
+		{
+			for (Bitu i = 0; i != samples*2; i++, buffer++) // repeat samples
+			{
+				buffer[0] = stretchbuf[i < (use*2) ? i : (use*2) - (i % (use*2))];
+			}
+		}
+		else
+		{
+			for (Bitu i = 0, jMax = use - 1; i != samples; i++, buffer += 2) // linear interpolation
+			{
+				const double src_pos_float = i * audio_stretch;
+				const Bitu j0 = (Bitu)src_pos_float, j1 = j0 + (Bitu)(j0 != jMax);
+				const double frac = src_pos_float - j0;
+				buffer[0] = (short)((1.0 - frac) * stretchbuf[j0 * 2 + 0] + frac * stretchbuf[j1 * 2 + 0]); // stretchbuf[j0 * 2 + 0] // simple nearest
+				buffer[1] = (short)((1.0 - frac) * stretchbuf[j0 * 2 + 1] + frac * stretchbuf[j1 * 2 + 1]); // stretchbuf[j0 * 2 + 1] // simple nearest
+			}
+		}
+
+		if (speed == 0.0f && use < samples) { memset(buffer - (samples - use) * 2, 0, (samples - use) * 4); }
+	}
+
+	// The mixer.tick_add should always be at the default value after running MIXER_CallBack (due to Mixer_irq_important always returning false)
+	DBP_ASSERT(mixer.tick_add == calc_tickadd(mixer.freq));
+	if (have > (use + 600) && have > (want + 600))
+	{
+		mixer.tick_add /= 2;
+		//printf("[DBMIXER] Throttle due to having %d samples buffered\n", (int)have);
+	}
+
+	// Log statistics every 1 real-time second passed
+	//const Bitu oldout = mixer_debug_output;
+	//mixer_debug_output += ((Bitu)want << TICK_SHIFT);
+	//if ((oldout / ((Bitu)44100 << TICK_SHIFT)) != (mixer_debug_output / ((Bitu)44100 << TICK_SHIFT)))
+	//{
+	//	printf("[DBMIXER] Output: %d - Generated: %d - Curblock: %d\n", (int)(mixer_debug_output >> TICK_SHIFT), (int)mixer_debug_generated, (int)samples);
+	//	mixer_debug_output -= ((Bitu)44100 << TICK_SHIFT);
+	//	mixer_debug_generated = 0;
+	//}
+
+	return (float)audio_stretch;
+}
+
+#endif

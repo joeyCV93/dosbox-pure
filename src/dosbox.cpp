@@ -139,6 +139,8 @@ Bit32s ticksDone;
 Bit32u ticksScheduled;
 bool ticksLocked;
 void increaseticks();
+#else
+bool doTick;
 #endif
 
 #include "shell.h"
@@ -225,7 +227,6 @@ static Bitu Normal_Loop(void) {
 #endif
 		} else {
 #ifdef C_DBP_CUSTOMTIMING
-			static bool doTick;
 			if (doTick) {doTick=false;TIMER_AddTick();}
 			else {doTick=true;GFX_Events();return 0;}
 #else
@@ -635,6 +636,11 @@ void DOSBOX_Init(void) {
 					  "of the DOSBox configuration directory, or one of the built-in shaders:\n"
 					  "advinterp2x, advinterp3x, advmame2x, advmame3x, rgb2x, rgb3x, scan2x,\n"
 					  "scan3x, tv2x, tv3x, sharp.");
+#endif
+#ifdef C_DBP_LIBRETRO
+	secprop->Add_bool("cga_newmodel",Property::Changeable::Always);
+	secprop->Add_int("cga_composite",Property::Changeable::Always);
+	secprop->Add_int("hercules_palette",Property::Changeable::Always);
 #endif
 
 	secprop=control->AddSection_prop("cpu",&CPU_Init,true);//done

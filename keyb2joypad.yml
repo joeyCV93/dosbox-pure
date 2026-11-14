@@ -25771,8 +25771,8 @@
  name: "Grand Prix 2"
  year: 1995
  identifier_1: GP2.EXE,5702937
- input_pad_lstick_down: PERIOD Move Down
  input_pad_lstick_left: COMMA Move Left
+ input_pad_lstick_right: PERIOD Move Right
  input_pad_up: UP Up
  input_pad_down: DOWN Down
  input_pad_left: LEFT Left
@@ -27434,6 +27434,7 @@
  input_wheel_4: 4 Dragon Claw
  input_wheel_5: 5 Hellstaff
  input_wheel_6: 6 Phoenix Rod
+ input_wheel_7: 7 Firemace
  input_pad_l: wheel
 -
  name: "Hero's Heart"

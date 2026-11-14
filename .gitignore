@@ -17,4 +17,3 @@ libs/
 *.dylib
 jni/*.bat
 /.idea
-/src

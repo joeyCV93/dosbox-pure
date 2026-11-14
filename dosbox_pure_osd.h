@@ -708,9 +708,9 @@ static void AppendListKeyNames(std::string& str, const DBP_ListItem& li)
 static void AppendSequenceSummary(std::string& str, const DBP_ListItem& li)
 {
 	AppendListKeyNames(str, li);
-	char num[32]; sprintf(num, " x%d, %dms gap", (int)li.seq_repeat, (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
+	char num[32]; sprintf(num, " x%d, %dms", (int)li.seq_repeat, (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
 	str += num;
-	if (li.seq_hold) str += ", hold last";
+	if (li.seq_hold) str += ", hold";
 }
 
 struct DBP_MapperMenuState final : DBP_MenuState
@@ -748,7 +748,7 @@ struct DBP_MapperMenuState final : DBP_MenuState
 			// Display list binding
 			if (const DBP_ListItem* li = DBP_GetList(b.port, b.meta))
 			{
-				list.emplace_back(IT_EDIT, item_info, (li->is_seq ? "  [Edit] Multi-Press: " : b.evt == DBPET_LISTCYCLE ? "  [Edit] Cycle List (Fwd): " : "  [Edit] Cycle List (Rev): "));
+				list.emplace_back(IT_EDIT, item_info, (li->is_seq ? "  [Edit] Sequence: " : b.evt == DBPET_LISTCYCLE ? "  [Edit] Cycle List (Fwd): " : "  [Edit] Cycle List (Rev): "));
 				if (li->is_seq) AppendSequenceSummary(list.back().str, *li); else AppendListKeyNames(list.back().str, *li);
 			}
 			return;
@@ -860,7 +860,7 @@ struct DBP_MapperMenuState final : DBP_MenuState
 				{
 					if (li.port != bind_port || !li.is_seq != !seq) continue;
 					const int list_index = DBP_GetListIndex(li) + 1; // 1 based, shared by lists and sequences of this port
-					list.emplace_back(IT_NONE, 0, (seq ? "  Sequence (button taps these keys in order):" : "  List:"));
+					list.emplace_back(IT_NONE, 0, (seq ? "  Sequence:" : "  List:"));
 					for (int i = 0; i != li.key_count; i++)
 					{
 						list.emplace_back(IT_EDIT, (Bit16s)(list_index * -100 - i), "    ");
@@ -869,11 +869,11 @@ struct DBP_MapperMenuState final : DBP_MenuState
 					if (seq)
 					{
 						char num[48];
-						sprintf(num, "    Repeat: %d times  (OK to change)", (int)li.seq_repeat);
+						sprintf(num, "    Repeat: %d times", (int)li.seq_repeat);
 						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10), num);
-						sprintf(num, "    Gap between presses: %d ms  (OK to change)", (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
+						sprintf(num, "    Gap: %d ms", (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
 						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10 + 1), num);
-						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10 + 2), (li.seq_hold ? "    Hold last key until button released: Yes" : "    Hold last key until button released: No"));
+						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10 + 2), (li.seq_hold ? "    Hold last key: Yes" : "    Hold last key: No"));
 					}
 					list.emplace_back(IT_NONE, 0);
 				}
@@ -970,7 +970,7 @@ struct DBP_MapperMenuState final : DBP_MenuState
 					if (li.port != bind_port) continue;
 					const int this_index = list_index++;
 					if (li.is_seq && reverse) continue; // sequences only go forward
-					list.emplace_back(IT_SELECT, (Bit16s)((reverse ? -20000 : -10000) - this_index), (li.is_seq ? "  Multi-Press: " : reverse ? "  Cycle List (Reverse): " : "  Cycle List (Forward): "));
+					list.emplace_back(IT_SELECT, (Bit16s)((reverse ? -20000 : -10000) - this_index), (li.is_seq ? "  Sequence: " : reverse ? "  Cycle List (Reverse): " : "  Cycle List (Forward): "));
 					if (li.is_seq) AppendSequenceSummary(list.back().str, li); else AppendListKeyNames(list.back().str, li);
 				}
 			}

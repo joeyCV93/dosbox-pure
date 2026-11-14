@@ -18,9 +18,9 @@
 
 struct DBP_WheelItem { Bit8u port, key_count, k[4]; };
 // Cycle lists: each press of a bound button sends the next key of the list. Holding the button steps through the list.
-// Multi-press sequences (is_seq) share the same storage: a press of the bound button taps all keys in order, seq_repeat times, with seq_delay * 50 ms between each down/up.
+// Multi-press sequences (is_seq) share the same storage: a press of the bound button taps all keys in order, seq_repeat times, with seq_delay * 50 ms between letting go of a key and pressing the next (each key is held for DBP_SEQ_HOLD_MS).
 // Lists belong to a port and are addressed everywhere (binds, events, menu) by their index within that port.
-enum { DBP_SEQ_MAX_REPEAT = 9, DBP_SEQ_MAX_DELAY = 10, DBP_SEQ_DELAY_STEP_MS = 50 };
+enum { DBP_SEQ_MAX_REPEAT = 9, DBP_SEQ_MAX_DELAY = 10, DBP_SEQ_DELAY_STEP_MS = 50, DBP_SEQ_HOLD_MS = 20 };
 struct DBP_ListItem { Bit8u port, key_count, current_index, k[DBP_LIST_MAX_KEYS]; Bit8u held_key; bool is_held, reverse; int repeat_counter; Bit8u is_seq, seq_repeat, seq_delay, seq_gen, seq_key; bool seq_down; }; // runtime state (is_held ... seq_down) is only touched by the emulation thread
 static std::vector<DBP_WheelItem> dbp_wheelitems;
 static std::vector<DBP_ListItem> dbp_listitems;

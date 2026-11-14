@@ -708,7 +708,7 @@ static void AppendListKeyNames(std::string& str, const DBP_ListItem& li)
 static void AppendSequenceSummary(std::string& str, const DBP_ListItem& li)
 {
 	AppendListKeyNames(str, li);
-	char num[32]; sprintf(num, " x%d @ %dms", (int)li.seq_repeat, (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
+	char num[32]; sprintf(num, " x%d, %dms gap", (int)li.seq_repeat, (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
 	str += num;
 }
 
@@ -870,7 +870,7 @@ struct DBP_MapperMenuState final : DBP_MenuState
 						char num[48];
 						sprintf(num, "    Repeat: %d times  (OK to change)", (int)li.seq_repeat);
 						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10), num);
-						sprintf(num, "    Delay: %d ms  (OK to change)", (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
+						sprintf(num, "    Gap between presses: %d ms  (OK to change)", (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
 						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10 + 1), num);
 					}
 					list.emplace_back(IT_NONE, 0);

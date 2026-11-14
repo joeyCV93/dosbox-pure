@@ -1824,7 +1824,7 @@ static void DBP_ListStep(DBP_ListItem& li)
 	li.current_index = (li.reverse ? (li.current_index ? li.current_index : li.key_count) - 1 : (li.current_index + 1) % li.key_count);
 }
 
-// Multi-press sequences: tap all keys in order (down, wait, up, wait), seq_repeat times. Steps are scheduled in emulated time so fast forward and pausing keep working.
+// Multi-press sequences: tap all keys in order (down, hold briefly, up, wait seq_delay, next down), seq_repeat times. Steps are scheduled in emulated time so fast forward and pausing keep working.
 // The scheduled event identifies its sequence by port, list index and generation, so retriggering or editing it makes older pending steps do nothing.
 static void DBP_SeqEvent(Bitu val);
 static void DBP_SeqStep(Bit8u port, int index, Bit8u gen, int step)
@@ -1835,7 +1835,7 @@ static void DBP_SeqStep(Bit8u port, int index, Bit8u gen, int step)
 	if (step >= total) return;
 	if (!(step & 1)) { li->seq_key = li->k[(step / 2) % li->key_count]; li->seq_down = true; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, true); }
 	else { li->seq_down = false; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, false); }
-	if (step + 1 < total) PIC_AddEvent(DBP_SeqEvent, (float)(li->seq_delay * DBP_SEQ_DELAY_STEP_MS), (Bitu)port | ((Bitu)index << 3) | ((Bitu)gen << 6) | ((Bitu)(step + 1) << 14));
+	if (step + 1 < total) PIC_AddEvent(DBP_SeqEvent, (float)((step & 1) ? (li->seq_delay * DBP_SEQ_DELAY_STEP_MS) : DBP_SEQ_HOLD_MS), (Bitu)port | ((Bitu)index << 3) | ((Bitu)gen << 6) | ((Bitu)(step + 1) << 14));
 }
 static void DBP_SeqEvent(Bitu val) { DBP_SeqStep((Bit8u)(val & 7), (int)((val >> 3) & 7), (Bit8u)((val >> 6) & 255), (int)(val >> 14)); }
 

@@ -710,6 +710,7 @@ static void AppendSequenceSummary(std::string& str, const DBP_ListItem& li)
 	AppendListKeyNames(str, li);
 	char num[32]; sprintf(num, " x%d, %dms gap", (int)li.seq_repeat, (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
 	str += num;
+	if (li.seq_hold) str += ", hold last";
 }
 
 struct DBP_MapperMenuState final : DBP_MenuState
@@ -872,6 +873,7 @@ struct DBP_MapperMenuState final : DBP_MenuState
 						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10), num);
 						sprintf(num, "    Gap between presses: %d ms  (OK to change)", (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
 						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10 + 1), num);
+						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10 + 2), (li.seq_hold ? "    Hold last key until button released: Yes" : "    Hold last key until button released: No"));
 					}
 					list.emplace_back(IT_NONE, 0);
 				}
@@ -1082,9 +1084,14 @@ struct DBP_MapperMenuState final : DBP_MenuState
 			DBP_ListItem* li = DBP_GetList(bind_port, list[sel].info / 10 - 1);
 			if (li)
 			{
-				int step = (x_change ? x_change : 1), max = (list[sel].info % 10 ? DBP_SEQ_MAX_DELAY : DBP_SEQ_MAX_REPEAT);
-				Bit8u& value = (list[sel].info % 10 ? li->seq_delay : li->seq_repeat);
-				value = (Bit8u)(((int)value - 1 + step + max) % max + 1);
+				const int which = list[sel].info % 10, step = (x_change ? x_change : 1);
+				if (which == 2) li->seq_hold = !li->seq_hold;
+				else
+				{
+					int max = (which ? DBP_SEQ_MAX_DELAY : DBP_SEQ_MAX_REPEAT);
+					Bit8u& value = (which ? li->seq_delay : li->seq_repeat);
+					value = (Bit8u)(((int)value - 1 + step + max) % max + 1);
+				}
 				li->seq_gen++; // cancels a sequence that is still running
 				changed = true;
 			}

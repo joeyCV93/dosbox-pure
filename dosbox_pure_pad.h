@@ -18,10 +18,10 @@
 
 struct DBP_WheelItem { Bit8u port, key_count, k[4]; };
 // Cycle lists: each press of a bound button sends the next key of the list. Holding the button steps through the list.
-// Multi-press sequences (is_seq) share the same storage: a press of the bound button taps all keys in order, seq_repeat times, with seq_delay * 50 ms between letting go of a key and pressing the next (each key is held for DBP_SEQ_HOLD_MS).
+// Multi-press sequences (is_seq) share the same storage: a press of the bound button taps all keys in order, seq_repeat times, with seq_delay * 50 ms between letting go of a key and pressing the next (each key is held for DBP_SEQ_HOLD_MS). With seq_hold the last key stays down until the button is released.
 // Lists belong to a port and are addressed everywhere (binds, events, menu) by their index within that port.
 enum { DBP_SEQ_MAX_REPEAT = 9, DBP_SEQ_MAX_DELAY = 10, DBP_SEQ_DELAY_STEP_MS = 50, DBP_SEQ_HOLD_MS = 20 };
-struct DBP_ListItem { Bit8u port, key_count, current_index, k[DBP_LIST_MAX_KEYS]; Bit8u held_key; bool is_held, reverse; int repeat_counter; Bit8u is_seq, seq_repeat, seq_delay, seq_gen, seq_key; bool seq_down; }; // runtime state (is_held ... seq_down) is only touched by the emulation thread
+struct DBP_ListItem { Bit8u port, key_count, current_index, k[DBP_LIST_MAX_KEYS]; Bit8u held_key; bool is_held, reverse; int repeat_counter; Bit8u is_seq, seq_repeat, seq_delay, seq_hold, seq_gen, seq_key; bool seq_down, seq_hold_wait; }; // runtime state (is_held ... seq_down) is only touched by the emulation thread
 static std::vector<DBP_WheelItem> dbp_wheelitems;
 static std::vector<DBP_ListItem> dbp_listitems;
 static DBP_ListItem* DBP_GetList(Bit8u port, int index) { for (DBP_ListItem& li : dbp_listitems) if (li.port == port && index-- == 0) return &li; return NULL; }
@@ -126,7 +126,7 @@ struct DBP_PadMapping
 				{
 					if (li.port != port || !li.key_count) continue;
 					*p++ = (Bit8u)LIST_ID | 32;
-					if (li.is_seq) { *p++ = 0x80 | li.key_count; *p++ = li.seq_repeat; *p++ = li.seq_delay; *p++ = 0; } // sequences have 3 extra bytes before the keys: repeat, delay, reserved
+					if (li.is_seq) { *p++ = 0x80 | li.key_count; *p++ = li.seq_repeat; *p++ = li.seq_delay; *p++ = (li.seq_hold ? 1 : 0); } // sequences have 3 extra bytes before the keys: repeat, delay, flags (bit 0 = hold last key)
 					else *p++ = li.key_count;
 					memcpy(p, li.k, li.key_count);
 					p += li.key_count;
@@ -664,7 +664,7 @@ private:
 				li.port = port;
 				li.key_count = (Bit8u)key_count;
 				memcpy(li.k, keys, key_count);
-				if (it.IsSeq) { li.is_seq = 1; li.seq_repeat = it.P[0]; li.seq_delay = it.P[1]; }
+				if (it.IsSeq) { li.is_seq = 1; li.seq_repeat = it.P[0]; li.seq_delay = it.P[1]; li.seq_hold = (it.P[2] & 1); }
 				continue;
 			}
 

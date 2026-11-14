@@ -1834,6 +1834,7 @@ static void DBP_SeqStep(Bit8u port, int index, Bit8u gen, int step)
 	const int total = li->key_count * li->seq_repeat * 2;
 	if (step >= total) return;
 	if (!(step & 1)) { li->seq_key = li->k[(step / 2) % li->key_count]; li->seq_down = true; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, true); }
+	else if (step + 1 == total && li->seq_hold && li->is_held) { li->seq_hold_wait = true; } // last key stays down until the button is released (see DBP_ListRelease)
 	else { li->seq_down = false; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, false); }
 	if (step + 1 < total) PIC_AddEvent(DBP_SeqEvent, (float)((step & 1) ? (li->seq_delay * DBP_SEQ_DELAY_STEP_MS) : DBP_SEQ_HOLD_MS), (Bitu)port | ((Bitu)index << 3) | ((Bitu)gen << 6) | ((Bitu)(step + 1) << 14));
 }
@@ -1846,6 +1847,8 @@ static void DBP_ListPress(Bit8u port, int index, bool reverse)
 	{
 		if (reverse || !li->key_count) return;
 		if (li->seq_down) { li->seq_down = false; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, false); } // pressed again while a key of the previous run is still down
+		li->seq_hold_wait = false;
+		li->is_held = true; // button is down
 		DBP_SeqStep(port, index, ++li->seq_gen, 0);
 		return;
 	}
@@ -1859,6 +1862,12 @@ static void DBP_ListPress(Bit8u port, int index, bool reverse)
 static void DBP_ListRelease(Bit8u port, int index, bool reverse)
 {
 	DBP_ListItem* li = DBP_GetList(port, index);
+	if (li && li->is_seq)
+	{
+		li->is_held = false;
+		if (li->seq_hold_wait) { li->seq_hold_wait = false; li->seq_down = false; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, false); } // let go of the held last key
+		return;
+	}
 	if (!li || !li->is_held || li->reverse != reverse) return;
 	li->is_held = false;
 	KEYBOARD_AddKey((KBD_KEYS)li->held_key, false);
@@ -1869,7 +1878,7 @@ static void DBP_ListRepeatTick()
 	// Called once per emulated frame. When a list button is held, keep cycling after an initial delay of 30 frames and then every 6 frames
 	for (DBP_ListItem& li : dbp_listitems)
 	{
-		if (!li.is_held) continue;
+		if (!li.is_held || li.is_seq) continue;
 		li.repeat_counter++;
 		if (li.repeat_counter < 30 || (li.repeat_counter > 30 && (li.repeat_counter % 6))) continue;
 		KEYBOARD_AddKey((KBD_KEYS)li.held_key, false);

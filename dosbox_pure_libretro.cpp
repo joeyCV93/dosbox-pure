@@ -102,6 +102,7 @@ struct DBP_InputBind
 	#define PORT_DEVICE_INDEX_ID(b) (*(Bit32u*)&static_cast<const DBP_InputBind&>(b))
 };
 enum { DBP_MAX_PORTS = 8, DBP_KEYBOARD_PORT, DBP_PORT_MASK = 0x7, DBP_SHIFT_PORT_BIT = 0x80, DBP_NO_PORT = 255, DBP_JOY_ANALOG_RANGE = 0x8000 }; // analog stick range is -0x8000 to 0x8000
+enum { DBP_LIST_MAX_PER_PORT = 8, DBP_LIST_MAX_KEYS = 10, DBP_LIST_SLOTS = DBP_MAX_PORTS * DBP_LIST_MAX_PER_PORT }; // cycle lists (see dosbox_pure_pad.h)
 static const char* DBP_KBDNAMES[KBD_LAST+1] =
 {
 	"None","1","2","3","4","5","6","7","8","9","0","Q","W","E","R","T","Y","U","I","O","P","A","S","D","F","G","H","J","K","L","Z","X","C","V","B","N","M",
@@ -200,7 +201,7 @@ static struct DBP_Event { DBP_Event_Type type; Bit8u port; int val, val2; } dbp_
 static int dbp_event_queue_write_cursor;
 static int dbp_event_queue_read_cursor;
 static int dbp_keys_down_count;
-static unsigned char dbp_keys_down[KBD_LAST + 23];
+static unsigned char dbp_keys_down[KBD_LAST + 21 + (2 * DBP_LIST_SLOTS)]; // after the keys: mouse, joy, hat, osd, wheel, shift port, then forward and reverse cycle list slots (port * DBP_LIST_MAX_PER_PORT + list)
 static unsigned short dbp_keymap_dos2retro[KBD_LAST];
 static unsigned char dbp_keymap_retro2dos[RETROK_LAST];
 
@@ -344,10 +345,10 @@ static void DBP_QueueEvent(DBP_Event_Type type, Bit8u port, int val = 0, int val
 		case DBPET_TOGGLEOSDUP:    DBP_ASSERT(val >= 0 && val < 1); downs += KBD_LAST + 15; goto check_up;
 		case DBPET_ACTIONWHEEL:    DBP_ASSERT(val >= 0 && val < 1); downs += KBD_LAST + 16; goto check_down;
 		case DBPET_ACTIONWHEELUP:  DBP_ASSERT(val >= 0 && val < 1); downs += KBD_LAST + 16; goto check_up;
-	case DBPET_LISTCYCLE:      DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 21; goto check_down;
-	case DBPET_LISTCYCLEUP:    DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 21; goto check_up;
-	case DBPET_LISTCYCLEREVERSE:      DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 22; goto check_down;
-	case DBPET_LISTCYCLEREVERSEUP:    DBP_ASSERT(val >= 0 && val < 32); downs += KBD_LAST + 22; goto check_up;
+		case DBPET_LISTCYCLE:          DBP_ASSERT(port < DBP_MAX_PORTS && val >= 0 && val < DBP_LIST_MAX_PER_PORT); downs += KBD_LAST + 21 + (port * DBP_LIST_MAX_PER_PORT); goto check_down;
+		case DBPET_LISTCYCLEUP:        DBP_ASSERT(port < DBP_MAX_PORTS && val >= 0 && val < DBP_LIST_MAX_PER_PORT); downs += KBD_LAST + 21 + (port * DBP_LIST_MAX_PER_PORT); goto check_up;
+		case DBPET_LISTCYCLEREVERSE:   DBP_ASSERT(port < DBP_MAX_PORTS && val >= 0 && val < DBP_LIST_MAX_PER_PORT); downs += KBD_LAST + 21 + DBP_LIST_SLOTS + (port * DBP_LIST_MAX_PER_PORT); goto check_down;
+		case DBPET_LISTCYCLEREVERSEUP: DBP_ASSERT(port < DBP_MAX_PORTS && val >= 0 && val < DBP_LIST_MAX_PER_PORT); downs += KBD_LAST + 21 + DBP_LIST_SLOTS + (port * DBP_LIST_MAX_PER_PORT); goto check_up;
 		case DBPET_SHIFTPORT:      DBP_ASSERT(val >= 0 && val < 4); downs += KBD_LAST + 17; goto check_down;
 		case DBPET_SHIFTPORTUP:    DBP_ASSERT(val >= 0 && val < 4); downs += KBD_LAST + 17; goto check_up;
 
@@ -424,11 +425,11 @@ static void DBP_QueueEvent(DBP_Event_Type type, Bit8u port, int val = 0, int val
 
 static void DBP_ReleaseKeyEvents(bool onlyPhysicalKeys)
 {
-	for (Bit8u i = KBD_NONE + 1, iEnd = (onlyPhysicalKeys ? KBD_LAST : KBD_LAST + 21); i != iEnd; i++)
+	for (int i = KBD_NONE + 1, iEnd = (onlyPhysicalKeys ? KBD_LAST : (int)sizeof(dbp_keys_down)); i != iEnd; i++)
 	{
 		if (!dbp_keys_down[i] || (onlyPhysicalKeys && (!(dbp_keys_down[i] & DBP_DOWN_BY_KEYBOARD) || input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, dbp_keymap_dos2retro[i])))) continue;
 		dbp_keys_down[i] = 1;
-		DBP_Event_Type type; int val = i;
+		DBP_Event_Type type; int val = i; Bit8u port = DBP_NO_PORT;
 		if      (i < KBD_LAST +  0) type = DBPET_KEYUP;
 		else if (i < KBD_LAST +  3) { val -=  KBD_LAST +  0; type = DBPET_MOUSEUP; }
 		else if (i < KBD_LAST +  5) { val -=  KBD_LAST +  3; type = DBPET_JOY1UP; }
@@ -436,8 +437,16 @@ static void DBP_ReleaseKeyEvents(bool onlyPhysicalKeys)
 		else if (i < KBD_LAST + 15) { val -=  KBD_LAST +  7; type = DBPET_JOYHATUNSETBIT; }
 		else if (i < KBD_LAST + 16) { val -=  KBD_LAST + 15; type = DBPET_TOGGLEOSDUP; }
 		else if (i < KBD_LAST + 17) { val -=  KBD_LAST + 16; type = DBPET_ACTIONWHEELUP; }
-		else                        { val -=  KBD_LAST + 17; type = DBPET_SHIFTPORTUP; }
-		DBP_QueueEvent(type, DBP_NO_PORT, val);
+		else if (i < KBD_LAST + 21) { val -=  KBD_LAST + 17; type = DBPET_SHIFTPORTUP; }
+		else
+		{
+			val -= KBD_LAST + 21; // cycle list slots
+			type = (val < DBP_LIST_SLOTS ? DBPET_LISTCYCLEUP : DBPET_LISTCYCLEREVERSEUP);
+			val %= DBP_LIST_SLOTS;
+			port = (Bit8u)(val / DBP_LIST_MAX_PER_PORT);
+			val %= DBP_LIST_MAX_PER_PORT;
+		}
+		DBP_QueueEvent(type, port, val);
 	}
 }
 
@@ -1804,6 +1813,47 @@ static bool GFX_AdvanceFrame(bool force_skip, bool force_no_auto_adjust)
 	goto return_true;
 }
 
+// Cycle lists (all functions below run on the emulation thread)
+static void DBP_ListStep(DBP_ListItem& li)
+{
+	// Press the key at the current position and move on to the next one (in the direction the list is being cycled)
+	if (li.current_index >= li.key_count) li.current_index = 0; // the list might have been edited in the menu
+	li.held_key = li.k[li.current_index];
+	KEYBOARD_AddKey((KBD_KEYS)li.held_key, true);
+	li.current_index = (li.reverse ? (li.current_index ? li.current_index : li.key_count) - 1 : (li.current_index + 1) % li.key_count);
+}
+
+static void DBP_ListPress(Bit8u port, int index, bool reverse)
+{
+	DBP_ListItem* li = DBP_GetList(port, index);
+	if (!li || !li->key_count || li->is_held) return;
+	li->is_held = true;
+	li->reverse = reverse;
+	li->repeat_counter = 0;
+	DBP_ListStep(*li);
+}
+
+static void DBP_ListRelease(Bit8u port, int index, bool reverse)
+{
+	DBP_ListItem* li = DBP_GetList(port, index);
+	if (!li || !li->is_held || li->reverse != reverse) return;
+	li->is_held = false;
+	KEYBOARD_AddKey((KBD_KEYS)li->held_key, false);
+}
+
+static void DBP_ListRepeatTick()
+{
+	// Called once per emulated frame. When a list button is held, keep cycling after an initial delay of 30 frames and then every 6 frames
+	for (DBP_ListItem& li : dbp_listitems)
+	{
+		if (!li.is_held) continue;
+		li.repeat_counter++;
+		if (li.repeat_counter < 30 || (li.repeat_counter > 30 && (li.repeat_counter % 6))) continue;
+		KEYBOARD_AddKey((KBD_KEYS)li.held_key, false);
+		DBP_ListStep(li);
+	}
+}
+
 void GFX_Events()
 {
 	// Some configuration modifications (like keyboard layout) can cause this to be called recursively
@@ -1852,90 +1902,10 @@ void GFX_Events()
 			case DBPET_ACTIONWHEEL: DBP_WheelShiftOSD(e.port, true); break;
 			case DBPET_ACTIONWHEELUP: DBP_WheelShiftOSD(e.port, false); break;
 
-		case DBPET_LISTCYCLE:
-			{
-				// e.val contains the list index (from bind.meta)
-				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
-				{
-					DBP_ListItem& li = dbp_listitems[e.val];
-					if (li.key_count > 0)
-					{
-						Bit8u key = li.k[li.current_index];
-						// Press the key (will be released on LISTCYCLEUP)
-						KEYBOARD_AddKey((KBD_KEYS)key, true);
-
-						// Advance index forward for next press
-						li.current_index = (li.current_index + 1) % li.key_count;
-
-						// Start tracking hold for repeat (forward direction)
-						li.is_held = true;
-						li.reverse = false;
-						li.repeat_counter = 0;
-					}
-				}
-				break;
-			}
-		case DBPET_LISTCYCLEUP:
-			{
-				// Release the key that was just pressed
-				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
-				{
-					DBP_ListItem& li = dbp_listitems[e.val];
-					if (li.key_count > 0)
-					{
-						// Release the previous key (we already advanced the index)
-						Bit8u prev_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
-						Bit8u key = li.k[prev_index];
-						KEYBOARD_AddKey((KBD_KEYS)key, false);
-
-						// Stop tracking hold
-						li.is_held = false;
-					}
-				}
-				break;
-			}
-		case DBPET_LISTCYCLEREVERSE:
-			{
-				// e.val contains the list index (from bind.meta)
-				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
-				{
-					DBP_ListItem& li = dbp_listitems[e.val];
-					if (li.key_count > 0)
-					{
-						Bit8u key = li.k[li.current_index];
-						// Press the key (will be released on LISTCYCLEREVERSEUP)
-						KEYBOARD_AddKey((KBD_KEYS)key, true);
-
-						// Advance index backward (with wrap-around)
-						li.current_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
-
-						// Start tracking hold for repeat (reverse direction)
-						li.is_held = true;
-						li.reverse = true;
-						li.repeat_counter = 0;
-					}
-				}
-				break;
-			}
-		case DBPET_LISTCYCLEREVERSEUP:
-			{
-				// Release the key that was just pressed
-				if (e.val >= 0 && e.val < (int)dbp_listitems.size())
-				{
-					DBP_ListItem& li = dbp_listitems[e.val];
-					if (li.key_count > 0)
-					{
-						// Release the previous key (we already advanced the index)
-						Bit8u next_index = (li.current_index + 1) % li.key_count;
-						Bit8u key = li.k[next_index];
-						KEYBOARD_AddKey((KBD_KEYS)key, false);
-
-						// Stop tracking hold
-						li.is_held = false;
-					}
-				}
-				break;
-			}
+			case DBPET_LISTCYCLE:          DBP_ListPress(e.port, e.val, false); break;
+			case DBPET_LISTCYCLEUP:        DBP_ListRelease(e.port, e.val, false); break;
+			case DBPET_LISTCYCLEREVERSE:   DBP_ListPress(e.port, e.val, true); break;
+			case DBPET_LISTCYCLEREVERSEUP: DBP_ListRelease(e.port, e.val, true); break;
 
 			case DBPET_SHIFTPORT: DBP_WheelShiftOSD(e.port, true, (Bit8u)e.val); break;
 			case DBPET_SHIFTPORTUP: DBP_WheelShiftOSD(e.port, false, (Bit8u)e.val); break;
@@ -1985,6 +1955,7 @@ void GFX_Events()
 
 	if (wasFrameEnd)
 	{
+		DBP_ListRepeatTick();
 		if ((mouse_joy_x || mouse_joy_y) && (abs(mouse_joy_x) > 5 || abs(mouse_joy_y) > 5))
 		{
 			float mx = mouse_joy_x * dbp_joymouse_speed, my = mouse_joy_y * dbp_joymouse_speed;
@@ -3617,36 +3588,6 @@ void retro_run(void)
 			if (val != b.lastval) b.Update(val);
 		}
 
-		// Handle list cycling repeat when button is held
-		for (size_t i = 0; i < dbp_listitems.size(); i++)
-		{
-			DBP_ListItem& li = dbp_listitems[i];
-			if (li.is_held && li.key_count > 0)
-			{
-				li.repeat_counter++;
-				// Initial delay: 30 frames (~500ms at 60fps), then repeat every 6 frames (~100ms)
-				bool should_repeat = (li.repeat_counter == 30 || (li.repeat_counter > 30 && (li.repeat_counter % 6) == 0));
-				if (should_repeat)
-				{
-					// Release the current key
-					Bit8u prev_index = li.reverse
-						? ((li.current_index + 1) % li.key_count)  // for reverse, previous is next
-						: ((li.current_index == 0) ? li.key_count - 1 : li.current_index - 1);  // for forward, previous is prev
-					Bit8u old_key = li.k[prev_index];
-					KEYBOARD_AddKey((KBD_KEYS)old_key, false);
-
-					// Press the next key
-					Bit8u new_key = li.k[li.current_index];
-					KEYBOARD_AddKey((KBD_KEYS)new_key, true);
-
-					// Advance index in the appropriate direction
-					if (li.reverse)
-						li.current_index = (li.current_index == 0) ? li.key_count - 1 : li.current_index - 1;
-					else
-						li.current_index = (li.current_index + 1) % li.key_count;
-				}
-			}
-		}
 	}
 	else if (dbp_intercept == dbp_intercept_next)
 		dbp_intercept->input();

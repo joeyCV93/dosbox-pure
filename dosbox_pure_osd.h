@@ -705,12 +705,19 @@ static void AppendListKeyNames(std::string& str, const DBP_ListItem& li)
 	}
 }
 
+static void AppendSequenceSummary(std::string& str, const DBP_ListItem& li)
+{
+	AppendListKeyNames(str, li);
+	char num[32]; sprintf(num, " x%d @ %dms", (int)li.seq_repeat, (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
+	str += num;
+}
+
 struct DBP_MapperMenuState final : DBP_MenuState
 {
 	#ifndef DBP_STANDALONE
-	enum ItemType : Bit8u { IT_CANCEL = _IT_CUSTOM, IT_PRESET, IT_SELECT, IT_EDIT, IT_ADD, IT_DEL, IT_DEVICE, IT_DIVIDER };
+	enum ItemType : Bit8u { IT_CANCEL = _IT_CUSTOM, IT_PRESET, IT_SELECT, IT_EDIT, IT_ADD, IT_DEL, IT_DEVICE, IT_DIVIDER, IT_SEQPARAM };
 	#else
-	enum ItemType : Bit8u { IT_CANCEL = _IT_CUSTOM, IT_PRESET, IT_SELECT, IT_EDIT, IT_ADD, IT_DEL, IT_DEVICE, IT_DIVIDER, IT_BINDJOY };
+	enum ItemType : Bit8u { IT_CANCEL = _IT_CUSTOM, IT_PRESET, IT_SELECT, IT_EDIT, IT_ADD, IT_DEL, IT_DEVICE, IT_DIVIDER, IT_SEQPARAM, IT_BINDJOY };
 	#endif
 	enum EditMode : Bit8u { NOT_EDITING, EDIT_EXISTING, EDIT_NEW, EDIT_ADDITIONAL };
 	int main_sel = 0;
@@ -740,8 +747,8 @@ struct DBP_MapperMenuState final : DBP_MenuState
 			// Display list binding
 			if (const DBP_ListItem* li = DBP_GetList(b.port, b.meta))
 			{
-				list.emplace_back(IT_EDIT, item_info, (b.evt == DBPET_LISTCYCLE ? "  [Edit] Cycle List (Fwd): " : "  [Edit] Cycle List (Rev): "));
-				AppendListKeyNames(list.back().str, *li);
+				list.emplace_back(IT_EDIT, item_info, (li->is_seq ? "  [Edit] Multi-Press: " : b.evt == DBPET_LISTCYCLE ? "  [Edit] Cycle List (Fwd): " : "  [Edit] Cycle List (Rev): "));
+				if (li->is_seq) AppendSequenceSummary(list.back().str, *li); else AppendListKeyNames(list.back().str, *li);
 			}
 			return;
 		}
@@ -840,21 +847,37 @@ struct DBP_MapperMenuState final : DBP_MenuState
 			// List items section
 			list.emplace_back(IT_NONE, 2);
 			list.emplace_back(IT_NONE, 0, "Cycle Lists: ");
-			int list_index = 0;
-			for (const DBP_ListItem& li : dbp_listitems)
+			const int list_total = DBP_GetListCount(bind_port);
+			for (int seq = 0; seq != 2; seq++)
 			{
-				if (li.port != bind_port) continue;
-				list_index++;
-				list.emplace_back(IT_NONE, 0, "  List:");
-				for (int i = 0; i != li.key_count; i++)
+				if (seq)
 				{
-					list.emplace_back(IT_EDIT, (Bit16s)(list_index * -100 - i), "    ");
-					list.back().str += DBP_GETKEYNAME(li.k[i]);
+					list.emplace_back(IT_NONE, 2);
+					list.emplace_back(IT_NONE, 0, "Multi-Press Sequences: ");
 				}
+				for (const DBP_ListItem& li : dbp_listitems)
+				{
+					if (li.port != bind_port || !li.is_seq != !seq) continue;
+					const int list_index = DBP_GetListIndex(li) + 1; // 1 based, shared by lists and sequences of this port
+					list.emplace_back(IT_NONE, 0, (seq ? "  Sequence (button taps these keys in order):" : "  List:"));
+					for (int i = 0; i != li.key_count; i++)
+					{
+						list.emplace_back(IT_EDIT, (Bit16s)(list_index * -100 - i), "    ");
+						list.back().str += DBP_GETKEYNAME(li.k[i]);
+					}
+					if (seq)
+					{
+						char num[48];
+						sprintf(num, "    Repeat: %d times  (OK to change)", (int)li.seq_repeat);
+						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10), num);
+						sprintf(num, "    Delay: %d ms  (OK to change)", (int)li.seq_delay * DBP_SEQ_DELAY_STEP_MS);
+						list.emplace_back(IT_SEQPARAM, (Bit16s)(list_index * 10 + 1), num);
+					}
+					list.emplace_back(IT_NONE, 0);
+				}
+				if (list_total < DBP_LIST_MAX_PER_PORT) list.emplace_back(IT_ADD, (seq ? -3 : -2), (seq ? "  Add Sequence" : "  Add List"));
 				list.emplace_back(IT_NONE, 0);
 			}
-			if (list_index < DBP_LIST_MAX_PER_PORT) list.emplace_back(IT_ADD, -2, "  Add List");
-			list.emplace_back(IT_NONE, 0);
 		}
 		if (!DBP_FullscreenOSD)
 		{
@@ -929,7 +952,7 @@ struct DBP_MapperMenuState final : DBP_MenuState
 		for (const DBP_SpecialMapping& sm : DBP_SpecialMappings)
 		{
 			// Allow special mappings for regular binds and wheels, but not lists (-2 and -100 and below)
-			if (sm.dev || (sm.evt != DBPET_TOGGLEOSD && (edit_info == -2 || edit_info <= -100))) continue;
+			if (sm.dev || (sm.evt != DBPET_TOGGLEOSD && (edit_info == -2 || edit_info == -3 || edit_info <= -100))) continue;
 			if (sm.evt == DBPET_SHIFTPORT && sm.meta == bind_port) continue;
 			list.emplace_back(IT_SELECT, (Bit16s)(DBP_SPECIALMAPPINGS_KEY + (&sm - DBP_SpecialMappings)), "  ");
 			list.back().str += sm.name;
@@ -943,8 +966,10 @@ struct DBP_MapperMenuState final : DBP_MenuState
 				for (const DBP_ListItem& li : dbp_listitems)
 				{
 					if (li.port != bind_port) continue;
-					list.emplace_back(IT_SELECT, (Bit16s)((reverse ? -20000 : -10000) - list_index++), (reverse ? "  Cycle List (Reverse): " : "  Cycle List (Forward): "));
-					AppendListKeyNames(list.back().str, li);
+					const int this_index = list_index++;
+					if (li.is_seq && reverse) continue; // sequences only go forward
+					list.emplace_back(IT_SELECT, (Bit16s)((reverse ? -20000 : -10000) - this_index), (li.is_seq ? "  Multi-Press: " : reverse ? "  Cycle List (Reverse): " : "  Cycle List (Forward): "));
+					if (li.is_seq) AppendSequenceSummary(list.back().str, li); else AppendListKeyNames(list.back().str, li);
 				}
 			}
 		}
@@ -1051,6 +1076,23 @@ struct DBP_MapperMenuState final : DBP_MenuState
 	{
 		if (res == RES_CANCEL) ok_type = IT_CANCEL;
 
+		if (edit_mode == NOT_EDITING && sel < (int)list.size() && list[sel].type == IT_SEQPARAM && (x_change || ok_type == IT_SEQPARAM))
+		{
+			// Change a sequence setting: OK steps up (wrapping around), left/right step down/up
+			DBP_ListItem* li = DBP_GetList(bind_port, list[sel].info / 10 - 1);
+			if (li)
+			{
+				int step = (x_change ? x_change : 1), max = (list[sel].info % 10 ? DBP_SEQ_MAX_DELAY : DBP_SEQ_MAX_REPEAT);
+				Bit8u& value = (list[sel].info % 10 ? li->seq_delay : li->seq_repeat);
+				value = (Bit8u)(((int)value - 1 + step + max) % max + 1);
+				li->seq_gen++; // cancels a sequence that is still running
+				changed = true;
+			}
+			main_sel = sel;
+			menu_top();
+			return;
+		}
+
 		if (x_change && edit_mode == NOT_EDITING)
 		{
 			menu_top(x_change);
@@ -1095,6 +1137,7 @@ struct DBP_MapperMenuState final : DBP_MenuState
 					if (DBP_GetListCount(bind_port) < DBP_LIST_MAX_PER_PORT)
 					{
 						DBP_ListItem nl = {}; nl.port = bind_port; nl.key_count = 1; nl.k[0] = (Bit8u)list[sel].info;
+						if (edit_info == -3) { nl.is_seq = 1; nl.seq_repeat = 2; nl.seq_delay = 1; } // new sequence: double tap, 50 ms
 						dbp_listitems.push_back(nl);
 					}
 				}

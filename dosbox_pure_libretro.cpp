@@ -27,6 +27,7 @@
 #include "include/control.h"
 #include "include/render.h"
 #include "include/keyboard.h"
+#include "include/pic.h"
 #include "include/mouse.h"
 #include "include/joystick.h"
 #include "include/bios_disk.h"
@@ -1823,9 +1824,31 @@ static void DBP_ListStep(DBP_ListItem& li)
 	li.current_index = (li.reverse ? (li.current_index ? li.current_index : li.key_count) - 1 : (li.current_index + 1) % li.key_count);
 }
 
+// Multi-press sequences: tap all keys in order (down, wait, up, wait), seq_repeat times. Steps are scheduled in emulated time so fast forward and pausing keep working.
+// The scheduled event identifies its sequence by port, list index and generation, so retriggering or editing it makes older pending steps do nothing.
+static void DBP_SeqEvent(Bitu val);
+static void DBP_SeqStep(Bit8u port, int index, Bit8u gen, int step)
+{
+	DBP_ListItem* li = DBP_GetList(port, index);
+	if (!li || !li->is_seq || li->seq_gen != gen || !li->key_count) return;
+	const int total = li->key_count * li->seq_repeat * 2;
+	if (step >= total) return;
+	if (!(step & 1)) { li->seq_key = li->k[(step / 2) % li->key_count]; li->seq_down = true; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, true); }
+	else { li->seq_down = false; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, false); }
+	if (step + 1 < total) PIC_AddEvent(DBP_SeqEvent, (float)(li->seq_delay * DBP_SEQ_DELAY_STEP_MS), (Bitu)port | ((Bitu)index << 3) | ((Bitu)gen << 6) | ((Bitu)(step + 1) << 14));
+}
+static void DBP_SeqEvent(Bitu val) { DBP_SeqStep((Bit8u)(val & 7), (int)((val >> 3) & 7), (Bit8u)((val >> 6) & 255), (int)(val >> 14)); }
+
 static void DBP_ListPress(Bit8u port, int index, bool reverse)
 {
 	DBP_ListItem* li = DBP_GetList(port, index);
+	if (li && li->is_seq)
+	{
+		if (reverse || !li->key_count) return;
+		if (li->seq_down) { li->seq_down = false; KEYBOARD_AddKey((KBD_KEYS)li->seq_key, false); } // pressed again while a key of the previous run is still down
+		DBP_SeqStep(port, index, ++li->seq_gen, 0);
+		return;
+	}
 	if (!li || !li->key_count || li->is_held) return;
 	li->is_held = true;
 	li->reverse = reverse;

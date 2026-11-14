@@ -18,8 +18,10 @@
 
 struct DBP_WheelItem { Bit8u port, key_count, k[4]; };
 // Cycle lists: each press of a bound button sends the next key of the list. Holding the button steps through the list.
+// Multi-press sequences (is_seq) share the same storage: a press of the bound button taps all keys in order, seq_repeat times, with seq_delay * 50 ms between each down/up.
 // Lists belong to a port and are addressed everywhere (binds, events, menu) by their index within that port.
-struct DBP_ListItem { Bit8u port, key_count, current_index, k[DBP_LIST_MAX_KEYS]; Bit8u held_key; bool is_held, reverse; int repeat_counter; }; // is_held, held_key and repeat_counter are only touched by the emulation thread
+enum { DBP_SEQ_MAX_REPEAT = 9, DBP_SEQ_MAX_DELAY = 10, DBP_SEQ_DELAY_STEP_MS = 50 };
+struct DBP_ListItem { Bit8u port, key_count, current_index, k[DBP_LIST_MAX_KEYS]; Bit8u held_key; bool is_held, reverse; int repeat_counter; Bit8u is_seq, seq_repeat, seq_delay, seq_gen, seq_key; bool seq_down; }; // runtime state (is_held ... seq_down) is only touched by the emulation thread
 static std::vector<DBP_WheelItem> dbp_wheelitems;
 static std::vector<DBP_ListItem> dbp_listitems;
 static DBP_ListItem* DBP_GetList(Bit8u port, int index) { for (DBP_ListItem& li : dbp_listitems) if (li.port == port && index-- == 0) return &li; return NULL; }
@@ -97,7 +99,7 @@ struct DBP_PadMapping
 			for (const DBP_InputBind& b : dbp_input_binds)
 				if (b.evt == DBPET_LISTCYCLE || b.evt == DBPET_LISTCYCLEREVERSE)
 					list_bindings_count++;
-			dbp_custom_mapping.resize((DBP_PADMAP_MAXSIZE_PORT * (last_port + 1)) + (dbp_wheelitems.size() * 5) + (dbp_listitems.size() * (2 + DBP_LIST_MAX_KEYS)) + (list_bindings_count * 3));
+			dbp_custom_mapping.resize((DBP_PADMAP_MAXSIZE_PORT * (last_port + 1)) + (dbp_wheelitems.size() * 5) + (dbp_listitems.size() * (2 + 3 + DBP_LIST_MAX_KEYS)) + (list_bindings_count * 3));
 			Bit8u *data = &dbp_custom_mapping[0], *p = data, *pCount;
 			for (Bit8u port = 0; port <= last_port; port++)
 			{
@@ -124,7 +126,8 @@ struct DBP_PadMapping
 				{
 					if (li.port != port || !li.key_count) continue;
 					*p++ = (Bit8u)LIST_ID | 32;
-					*p++ = li.key_count;
+					if (li.is_seq) { *p++ = 0x80 | li.key_count; *p++ = li.seq_repeat; *p++ = li.seq_delay; *p++ = 0; } // sequences have 3 extra bytes before the keys: repeat, delay, reserved
+					else *p++ = li.key_count;
 					memcpy(p, li.k, li.key_count);
 					p += li.key_count;
 					(*pCount)++;
@@ -652,13 +655,16 @@ private:
 
 			if (btnId == LIST_ID)
 			{
-				if (!it.KeyCount || it.KeyCount > DBP_LIST_MAX_KEYS || DBP_GetListCount(port) >= DBP_LIST_MAX_PER_PORT) continue; // ignore damaged data
+				const Bit8u* keys = (it.IsSeq ? it.P + 3 : it.P); const int key_count = (it.IsSeq ? it.KeyCount - 3 : it.KeyCount);
+				if (key_count < 1 || key_count > DBP_LIST_MAX_KEYS || DBP_GetListCount(port) >= DBP_LIST_MAX_PER_PORT) continue; // ignore damaged data
+				if (it.IsSeq && (!it.P[0] || it.P[0] > DBP_SEQ_MAX_REPEAT || !it.P[1] || it.P[1] > DBP_SEQ_MAX_DELAY)) continue;
 				dbp_listitems.emplace_back();
 				DBP_ListItem& li = dbp_listitems.back();
 				memset(&li, 0, sizeof(li));
 				li.port = port;
-				li.key_count = it.KeyCount;
-				memcpy(li.k, it.P, it.KeyCount);
+				li.key_count = (Bit8u)key_count;
+				memcpy(li.k, keys, key_count);
+				if (it.IsSeq) { li.is_seq = 1; li.seq_repeat = it.P[0]; li.seq_delay = it.P[1]; }
 				continue;
 			}
 
@@ -670,6 +676,7 @@ private:
 				else if (it.KeyCount == 1) list_index = (btnId - BIND_LIST_ID) / 2; // older format
 				else continue;
 				if (actual_button > RETRO_DEVICE_ID_JOYPAD_R3 || list_index >= DBP_GetListCount(port)) continue;
+				if (is_reverse && DBP_GetList(port, list_index)->is_seq) continue; // sequences only go forward
 
 				DBP_InputBind bnd = BindForBtn(port, actual_button);
 				bnd.evt = is_reverse ? DBPET_LISTCYCLEREVERSE : DBPET_LISTCYCLE;
@@ -947,10 +954,12 @@ private:
 			HasActionName = !!(v & 32);
 
 			// Handle extended format for LIST_ID with >4 keys
+			IsSeq = false;
 			if (BtnID == LIST_ID && HasActionName && !(v & 0xC0))
 			{
-				// Extended format: bit 5 set, key_count in next byte
+				// Extended format: bit 5 set, key_count in next byte (bit 7 there marks a sequence which has 3 extra bytes before the keys)
 				KeyCount = *(P++);
+				if (KeyCount & 0x80) { IsSeq = true; KeyCount = (KeyCount & 0x7F) + 3; }
 				HasActionName = false; // Clear flag since it's used for extended format
 			}
 			else
@@ -961,7 +970,7 @@ private:
 			DBP_ASSERT(Remain >= 0); // Removed BtnID check - we now support virtual button IDs for list bindings (22+)
 			if (HasActionName) { NameOffset = 0; do { NameOffset = (NameOffset<<7)|(*P&127); } while (*(P++) & 128); }
 		}
-		const Bit8u *P, **OutPtr; Bit8u Remain, KeyCount, BtnID; bool IsAnalog, HasActionName; Bit32u NameOffset;
+		const Bit8u *P, **OutPtr; Bit8u Remain, KeyCount, BtnID; bool IsAnalog, HasActionName, IsSeq; Bit32u NameOffset;
 	};
 
 	#ifndef NDEBUG // Can be used in a debuggers watch window
